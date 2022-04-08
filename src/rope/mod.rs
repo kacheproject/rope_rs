@@ -225,6 +225,7 @@ pub enum RoutingResult {
 #[derive(Debug, Clone, Copy)]
 pub enum NewPeerError {
     TunnelNotAvaliable,
+    BroadcastId,
 }
 
 impl From<NewTunnelError> for NewPeerError {
@@ -277,13 +278,17 @@ impl Router {
     }
 
     pub fn new_peer(&self, id: u128, static_public_key: Arc<X25519PublicKey>) -> Result<Arc<Peer>, NewPeerError> {
-        let tunidx = self.wg_dispatcher.next_idx()?;
-        let tunn = self.wg_dispatcher.new_tunnel(tunidx, static_public_key.clone(), None, None)?;
-        let peer = Peer::new_arc(id, static_public_key.clone(), tunn.clone());
-        self.wg_dispatcher.set_tunnel(tunidx, tunn, Arc::downgrade(&peer));
-        let mut peers = self.peers.write();
-        peers.push(peer.clone());
-        Ok(peer)
+        if id != 0 {
+            let tunidx = self.wg_dispatcher.next_idx()?;
+            let tunn = self.wg_dispatcher.new_tunnel(tunidx, static_public_key.clone(), None, None)?;
+            let peer = Peer::new_arc(id, static_public_key.clone(), tunn.clone());
+            self.wg_dispatcher.set_tunnel(tunidx, tunn, Arc::downgrade(&peer));
+            let mut peers = self.peers.write();
+            peers.push(peer.clone());
+            Ok(peer)
+        } else {
+            Err(NewPeerError::BroadcastId)
+        }
     }
 
     pub fn bind(self: Arc<Self>, port_number: u16, rx_backlog: usize) -> io::Result<Arc<Socket>> {
@@ -323,8 +328,22 @@ impl Router {
         let header = packet.get_header();
         if header.dst_addr_cmp(self.id) {
             self.route_packet_local(packet)
+        } else if header.dst_addr_cmp(0){
+            self.route_packet_broadcast(packet).await;
+            RoutingResult::Ok.into()
         } else {
             self.route_packet_remote(packet).await
+        }
+    }
+
+    async fn route_packet_broadcast(&self, packet: BoxedPacket) {
+        let header = packet.get_header();
+        let peers = self.peers.read().clone();
+        for peer in peers {
+            let mut new_header = header.clone();
+            new_header.dst_addr = peer.id.to_be_bytes();
+            let new_packet = packet.clone().replace_header(new_header);
+            let _ = self.route_packet(new_packet);
         }
     }
 
