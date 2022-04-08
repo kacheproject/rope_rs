@@ -301,7 +301,7 @@ impl Router {
         } else {
             port_number
         };
-        let (socket, prod) = Socket::new(self.clone(), port, rx_backlog);
+        let (socket, prod) = Socket::new(Arc::downgrade(&self), port, rx_backlog);
         opened_sockets.insert(port, (Arc::downgrade(&socket), prod));
         Ok(socket)
     }
@@ -423,7 +423,7 @@ impl Router {
 }
 
 pub struct Socket {
-    router: Arc<Router>,
+    router: Weak<Router>,
     port: u16,
     rx_ringbuf_cons: Mutex<ringbuf::Consumer<BoxedPacket>>,
     rx_notify: tokio::sync::Notify,
@@ -431,7 +431,7 @@ pub struct Socket {
 
 impl Socket {
     fn new(
-        router: Arc<Router>,
+        router: Weak<Router>,
         port: u16,
         rx_backlog: usize,
     ) -> (Arc<Self>, ringbuf::Producer<BoxedPacket>) {
@@ -447,23 +447,42 @@ impl Socket {
         )
     }
 
-    fn try_recv(&self) -> Option<BoxedPacket> {
-        self.rx_ringbuf_cons.lock().pop()
+    /// Try pop a packet up from ring buffer.
+    /// Return WouldBlock if no packet in the buffer, or BrokenPipe when the router had been dropped.
+    fn try_recv(&self) -> io::Result<BoxedPacket> {
+        let mut ringbuf = self.rx_ringbuf_cons.lock();
+        if let Some(data) = ringbuf.pop() {
+            Ok(data)
+        } else {
+            let _ = self.upgrade_router_ref()?;
+            Err(io::ErrorKind::WouldBlock.into())
+        }
     }
 
-    pub async fn recv_packet(&self) -> BoxedPacket {
+    pub async fn recv_packet(&self) -> io::Result<BoxedPacket> {
         loop {
-            if let Some(packet) = self.try_recv() {
-                break packet;
-            } else {
-                self.rx_notify.notified().await;
+            match self.try_recv() {
+                Ok(packet) => break Ok(packet),
+                Err(e) => if e.kind() == io::ErrorKind::WouldBlock {
+                    self.rx_notify.notified().await;
+                } else {
+                    break Err(e);
+                }
             }
+        }
+    }
+
+    fn upgrade_router_ref(&self) -> io::Result<Arc<Router>> {
+        if let Some(router) = self.router.upgrade() {
+            Ok(router)
+        } else {
+            Err(io::ErrorKind::BrokenPipe.into())
         }
     }
 
     pub async fn send_packet(&self, packet: BoxedPacket) -> io::Result<()> {
         let header = packet.get_header();
-        match self.router.route_packet(packet).await {
+        match self.upgrade_router_ref()?.route_packet(packet).await {
             RoutingResult::Ok => Ok(()),
             RoutingResult::IOE(e) => Err(e),
             RoutingResult::BrokenPipe => Err(io::Error::from(io::ErrorKind::BrokenPipe)),
@@ -496,7 +515,7 @@ impl Socket {
                 self.port,
                 buf_len,
                 dst_port,
-                self.router.id,
+                self.upgrade_router_ref()?.id,
                 dst_addr,
             ),
             buf,
