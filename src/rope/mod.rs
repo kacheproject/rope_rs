@@ -4,10 +4,8 @@ use boringtun::noise::{Tunn, TunnResult};
 use log::*;
 use parking_lot::{Mutex, RwLock};
 use rpv6::{BoxedPacket, Packet};
-use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::io;
-use std::mem::MaybeUninit;
 use std::net::SocketAddr;
 use std::ops::Deref;
 use std::sync::{Arc, Weak};
@@ -22,6 +20,11 @@ use wires::*;
 
 use self::wgdispatcher::NewTunnelError;
 mod netmeter;
+mod exaddr;
+use exaddr::ExternalAddr;
+mod msg;
+
+pub type Msg = msg::Msg;
 
 pub struct Peer {
     id: u128,
@@ -144,7 +147,7 @@ impl Peer {
 
 async fn router_routing_rx_thread_body(
     router_ref: Weak<Router>,
-    mut consumer: mpsc::Receiver<(bytes::Bytes, Option<SocketAddr>)>,
+    mut consumer: mpsc::Receiver<(bytes::Bytes, ExternalAddr)>,
 ) {
     let router_id = if let Some(router) = router_ref.upgrade() {
         router.id
@@ -161,7 +164,7 @@ async fn router_routing_rx_thread_body(
                     match router.wg_dispatcher.dispatch(&data) {
                         NewTunnel(pk) => {
                             if let Some(peer) = router.find_peer_by_public_key(&pk) {
-                                let ipaddr = sockaddr.map(|addr| addr.ip());
+                                let ipaddr = sockaddr.clone().into();
                                 let mut src: &[u8] = &data;
                                 loop {
                                     match peer.wgtunn.decapsulate(ipaddr, src, &mut buf) {
@@ -174,7 +177,9 @@ async fn router_routing_rx_thread_body(
                                         TunnResult::WriteToTunnelV6(data, _) => {
                                             match BoxedPacket::parse(Vec::from(data)) {
                                                 Ok(packet) => {
-                                                    let _ = router.route_packet(packet).await;
+                                                    let mut msg = Msg::new(packet);
+                                                    msg.set_src_external_addr(sockaddr);
+                                                    let _ = router.route_packet(msg).await;
                                                 }
                                                 Result::Err(e) => {
                                                     error!("Error when parsing packet: {:?}", e);
@@ -194,7 +199,7 @@ async fn router_routing_rx_thread_body(
                             }
                         }
                         Dispatch(tunn, peer_ref, idx) => {
-                            let ipaddr = sockaddr.map(|addr| addr.ip());
+                            let ipaddr = sockaddr.clone().into();
                             if let Some(peer) = peer_ref.upgrade() {
                                 let mut src: &[u8] = &data;
                                 loop {
@@ -208,7 +213,9 @@ async fn router_routing_rx_thread_body(
                                         TunnResult::WriteToTunnelV6(data, _) => {
                                             match BoxedPacket::parse(Vec::from(data)) {
                                                 Ok(packet) => {
-                                                    let _ = router.route_packet(packet).await;
+                                                    let mut msg = Msg::new(packet);
+                                                    msg.set_src_external_addr(sockaddr);
+                                                    let _ = router.route_packet(msg).await;
                                                 }
                                                 Result::Err(e) => {
                                                     error!("Error when parsing packet: {:?}", e);
@@ -246,9 +253,9 @@ pub struct Router {
     static_private_key: Arc<X25519SecretKey>,
     static_public_key: Arc<X25519PublicKey>,
     peers: RwLock<Vec<Arc<Peer>>>,
-    opened_sockets: RwLock<HashMap<u16, (Weak<Socket>, ringbuf::Producer<BoxedPacket>)>>,
+    opened_sockets: RwLock<HashMap<u16, (Weak<Socket>, ringbuf::Producer<Msg>)>>,
     wg_dispatcher: WireGuardDispatcher<Weak<Peer>>,
-    raw_packet_tx: mpsc::Sender<(bytes::Bytes, Option<SocketAddr>)>,
+    raw_packet_tx: mpsc::Sender<(bytes::Bytes, ExternalAddr)>,
 }
 
 pub enum RoutingResult {
@@ -345,7 +352,7 @@ impl Router {
     }
 
     fn find_avaliable_application_port(
-        opened_sockets: &mut HashMap<u16, (Weak<Socket>, ringbuf::Producer<BoxedPacket>)>,
+        opened_sockets: &mut HashMap<u16, (Weak<Socket>, ringbuf::Producer<Msg>)>,
     ) -> Option<u16> {
         let mut result = Option::None;
         for port in 1024..u16::MAX {
@@ -362,7 +369,7 @@ impl Router {
         result
     }
 
-    async fn route_packet(&self, packet: BoxedPacket) -> RoutingResult {
+    async fn route_packet(&self, packet: Msg) -> RoutingResult {
         let header = packet.get_header();
         if header.dst_addr_cmp(self.id) {
             self.route_packet_local(packet)
@@ -374,7 +381,7 @@ impl Router {
         }
     }
 
-    async fn route_packet_broadcast(&self, packet: BoxedPacket) {
+    async fn route_packet_broadcast(&self, packet: Msg) {
         let header = packet.get_header();
         let peers = self.peers.read().clone();
         for peer in peers {
@@ -385,7 +392,7 @@ impl Router {
         }
     }
 
-    fn route_packet_local(&self, packet: BoxedPacket) -> RoutingResult {
+    fn route_packet_local(&self, packet: Msg) -> RoutingResult {
         trace!(target: "Router.route_packet_local", "routing {:?}", packet);
         let mut opened_sockets = self.opened_sockets.write();
         let header = packet.get_header();
@@ -408,7 +415,7 @@ impl Router {
         }
     }
 
-    async fn route_packet_remote(&self, packet: BoxedPacket) -> RoutingResult {
+    async fn route_packet_remote(&self, packet: Msg) -> RoutingResult {
         trace!(target: "Router.route_packet_remote", "routing {:?}", packet);
         let header = packet.get_header();
         if let Some(peer) = self.find_peer_by_id(header.dst_addr_int()) {
@@ -441,7 +448,13 @@ impl Router {
                 match rx.recv_from(&mut buf).await {
                     Ok((size, addr)) => {
                         buf.resize(size, 0);
-                        match sender.send((buf.freeze(), addr)).await {
+                        let exaddr = if let Some(raddr) = addr {
+                            match &rx {
+                                Rx::Udp(_) => ExternalAddr::Udp(raddr),
+                                Rx::ChanPair(_) => ExternalAddr::None,
+                            }
+                        } else { ExternalAddr::None };
+                        match sender.send((buf.freeze(), exaddr)).await {
                             Ok(_) => {},
                             Err(_) => break,
                         }
@@ -463,7 +476,7 @@ impl Router {
 pub struct Socket {
     router: Weak<Router>,
     port: u16,
-    rx_ringbuf_cons: Mutex<ringbuf::Consumer<BoxedPacket>>,
+    rx_ringbuf_cons: Mutex<ringbuf::Consumer<Msg>>,
     rx_notify: tokio::sync::Notify,
 }
 
@@ -472,7 +485,7 @@ impl Socket {
         router: Weak<Router>,
         port: u16,
         rx_backlog: usize,
-    ) -> (Arc<Self>, ringbuf::Producer<BoxedPacket>) {
+    ) -> (Arc<Self>, ringbuf::Producer<Msg>) {
         let (prod, cons) = ringbuf::RingBuffer::new(rx_backlog).split();
         (
             Arc::new(Self {
@@ -487,7 +500,7 @@ impl Socket {
 
     /// Try pop a packet up from ring buffer.
     /// Return WouldBlock if no packet in the buffer, or BrokenPipe when the router had been dropped.
-    fn try_recv(&self) -> io::Result<BoxedPacket> {
+    fn try_recv(&self) -> io::Result<Msg> {
         let mut ringbuf = self.rx_ringbuf_cons.lock();
         if let Some(data) = ringbuf.pop() {
             Ok(data)
@@ -497,7 +510,7 @@ impl Socket {
         }
     }
 
-    pub async fn recv_packet(&self) -> io::Result<BoxedPacket> {
+    pub async fn recv_packet(&self) -> io::Result<Msg> {
         loop {
             match self.try_recv() {
                 Ok(packet) => break Ok(packet),
@@ -519,21 +532,26 @@ impl Socket {
     }
 
     pub async fn send_packet(&self, packet: BoxedPacket) -> io::Result<()> {
-        let header = packet.get_header();
-        match self.upgrade_router_ref()?.route_packet(packet).await {
+        let msg = Msg::new(packet);
+        self.send_msg(msg).await
+    }
+
+    pub async fn send_msg(&self, msg: Msg) -> io::Result<()> {
+        let header = msg.get_header();
+        match self.upgrade_router_ref()?.route_packet(msg).await {
             RoutingResult::Ok => Ok(()),
             RoutingResult::IOE(e) => Err(e),
             RoutingResult::BrokenPipe => Err(io::Error::from(io::ErrorKind::BrokenPipe)),
             RoutingResult::QueueFull => {
-                warn!(target: "Socket.send_packet", "({}) Queue is full.", self.get_local_port());
+                warn!("({}) Queue is full.", self.get_local_port());
                 Ok(())
             } // drop in slient
             RoutingResult::UnboundPort => {
-                warn!(target: "Socket.send_packet", "Unbound port {}.", header.dst_port);
+                warn!("Unbound port {}.", header.dst_port);
                 Ok(())
             }
             RoutingResult::NoDest => {
-                warn!(target: "Socket.send_packet", "No destination avaliable for {}.", header.dst_addr_int());
+                warn!("No destination avaliable for {}.", header.dst_addr_int());
                 Ok(())
             }
         }
