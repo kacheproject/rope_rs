@@ -59,9 +59,17 @@ impl Peer {
         }
     }
 
+    /// Scan all txs and remove the ones are removable.
+    /// This function will hold read-write lock on .txs.
+    pub fn gc_tx(&self) {
+        let mut txs = self.txs.write();
+        txs.retain(|v| !v.is_removable());
+    }
+
     /// Scan all txs and choose one with largest availability.
-    /// This function will hold lock on .current_tx
+    /// This function will hold lock on .current_tx and read-write lock on .txs.
     fn select_tx_slow(&self) -> Option<Arc<Tx>> {
+        self.gc_tx();
         let txs = self.txs.read();
         let best_tx = txs.iter().fold(None, |prev: Option<&Arc<Tx>>, next| match prev {
             Some(prev_tx) => if next.get_availability() > prev_tx.get_availability() { Some(next) } else { Some(prev_tx) },

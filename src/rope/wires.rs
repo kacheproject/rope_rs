@@ -54,6 +54,20 @@ impl Tx {
             },
         }
     }
+
+    pub fn is_removable(&self) -> bool {
+        match self {
+            Tx::ChanPair(tx) => {
+                tx.is_closed()
+            },
+            Tx::Udp((transport, _)) => {
+                let status = transport.status.lock();
+                let is_receiving = chrono::Utc::now().timestamp().saturating_sub(status.time_last_recv) > 300; // 5 mins
+                let is_timeout = status.is_timeout(300);
+                is_receiving && is_timeout
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
