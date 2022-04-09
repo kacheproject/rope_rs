@@ -1,4 +1,7 @@
 use std::time::Duration;
+use arrayvec::ArrayVec;
+use average::MeanWithError;
+use itertools::Itertools;
 
 #[derive(Clone, Copy, Debug)]
 struct BandwidthSample {
@@ -18,24 +21,15 @@ impl Default for BandwidthSample {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct LatencySample {
-    time: i64,
-    latency: Duration,
+enum StatusChange {
+    Avaliable(i64),
+    Unavaliable(i64),
 }
 
-impl Default for LatencySample {
-    fn default() -> Self {
-        Self {
-            time: chrono::Utc::now().timestamp(),
-            latency: Duration::from_secs(1),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct NetworkMeter {
     bandwidth_samples: [BandwidthSample; 5],
-    latency_samples: [LatencySample; 3],
+    status_samples: ArrayVec<StatusChange, 64>,
 }
 
 impl NetworkMeter {
@@ -49,9 +43,64 @@ impl NetworkMeter {
         sample.tx_bytes += tx_bytes;
     }
 
-    pub fn note_latency(&mut self, time: i64, latency: Duration) {
-        let mut sample = self.get_latency_sample_mut(time);
-        sample.latency = sample.latency + latency / 2
+    pub fn note_avaliable(&mut self, time: i64) {
+        if let Some(elmut) = self.status_samples.last_mut() {
+            if let StatusChange::Avaliable(t) = elmut {
+                if time > *t {
+                    *t = time;
+                }
+                return;
+            }
+        }
+        if self.status_samples.remaining_capacity() == 0 {
+            self.status_samples.pop_at(0);
+        }
+        self.status_samples.push(StatusChange::Avaliable(time));
+    }
+
+    pub fn note_unavaliable(&mut self, time: i64) {
+        if let Some(elmut) = self.status_samples.last_mut() {
+            if let StatusChange::Unavaliable(t) = elmut {
+                if time > *t {
+                    *t = time;
+                }
+                return;
+            }
+        }
+        if self.status_samples.remaining_capacity() == 0 {
+            self.status_samples.pop_at(0);
+        }
+        self.status_samples.push(StatusChange::Unavaliable(time));
+    }
+
+    pub fn get_availability(&self) -> f64 {
+        use StatusChange::*;
+        let mut tbf: ArrayVec<i32, 32> = ArrayVec::new();
+        let mut ttr: ArrayVec<i32, 32> = ArrayVec::new();
+        for (s0, s1) in self.status_samples.iter().tuples() {
+            match (s0, s1) {
+                (Unavaliable(t0), Avaliable(t1)) => {
+                    let duration = t1 - t0;
+                    ttr.push(if duration > i32::MAX.into() {
+                        i32::MAX
+                    } else {
+                        duration.try_into().unwrap()
+                    });
+                },
+                (Avaliable(t0), Unavaliable(t1)) => {
+                    let duration = t1 - t0;
+                    tbf.push(if duration > i32::MAX.into() {
+                        i32::MAX
+                    } else {
+                        duration.try_into().unwrap()
+                    });
+                }
+                _ => {},
+            }
+        }
+        let mtbf: f64 = tbf.iter().map::<f64, _>(|v| v.to_owned().into()).collect::<MeanWithError>().mean();
+        let mttr: f64 = tbf.iter().map::<f64, _>(|v| v.to_owned().into()).collect::<MeanWithError>().mean();
+        mtbf / (mtbf + mttr)
     }
 
     /// Return bandwidth in (rx, tx) form. The bandwidth is the average of 5-second samples.
@@ -89,22 +138,11 @@ impl NetworkMeter {
         }
     }
 
-    fn get_latency_sample_mut(&mut self, time: i64) -> &mut LatencySample {
-        if self.latency_samples[0].time == time {
-            &mut self.latency_samples[0]
-        } else {
-            let mut data = [LatencySample::default(); 2];
-            data.copy_from_slice(&self.latency_samples[0..2]);
-            let _ = &self.latency_samples[1..3].copy_from_slice(&data);
-            self.latency_samples[0] = self.latency_samples[1];
-            &mut self.latency_samples[0]
-        }
-    }
-
     pub fn new() -> Self {
+        let status_samples = ArrayVec::new();
         Self {
             bandwidth_samples: [BandwidthSample::default(); 5],
-            latency_samples: [LatencySample::default(); 3],
+            status_samples,
         }
     }
 }

@@ -16,7 +16,9 @@ log = { version = "0.4", features = ["max_level_trace", "release_max_level_warn"
 packed_struct = "0.10"
 ringbuf = "0.2"
 bytes = "1"
-
+arrayvec = "0.7"
+average = "0.13"
+itertools = "0.10"
 
 [dev-dependencies]
 simple_logger = { version = "2.1", features = ["stderr"] }
