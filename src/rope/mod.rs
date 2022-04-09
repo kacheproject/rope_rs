@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::io;
 use std::mem::MaybeUninit;
 use std::net::SocketAddr;
+use std::ops::Deref;
 use std::sync::{Arc, Weak};
 use tokio::sync::mpsc;
 
@@ -27,6 +28,7 @@ pub struct Peer {
     static_public_key: Arc<X25519PublicKey>,
     txs: RwLock<Vec<Arc<Tx>>>,
     wgtunn: Arc<Tunn>,
+    current_tx: Mutex<Option<Weak<Tx>>>,
 }
 
 pub enum EncryptedSendError {
@@ -53,15 +55,43 @@ impl Peer {
             static_public_key,
             txs: RwLock::new(Vec::new()),
             wgtunn,
+            current_tx: Mutex::new(None),
         }
     }
 
-    fn select_tx(&self) -> Option<Arc<Tx>> {
+    /// Scan all txs and choose one with largest availability.
+    /// This function will hold lock on .current_tx
+    fn select_tx_slow(&self) -> Option<Arc<Tx>> {
         let txs = self.txs.read();
-        if txs.len() > 0 {
-            Some(txs[0].clone())
+        let best_tx = txs.iter().fold(None, |prev: Option<&Arc<Tx>>, next| match prev {
+            Some(prev_tx) => if next.get_availability() > prev_tx.get_availability() { Some(next) } else { Some(prev_tx) },
+            None => Some(next)
+        }).cloned();
+        *self.current_tx.lock() = match best_tx.clone() {
+            Some(tx) => Some(Arc::downgrade(&tx)),
+            None => None,
+        };
+        debug!("Choose {:?} for peer {}", best_tx, self.id);
+        best_tx
+    }
+
+    fn select_tx(&self) -> Option<Arc<Tx>> {
+        let current_tx = self.current_tx.lock();
+        if let Some(tx_weakref) = current_tx.deref() {
+            if let Some(tx) = tx_weakref.upgrade() {
+                if tx.get_availability() <= 0.6 {
+                    std::mem::drop(current_tx); // avoid deadlock
+                    self.select_tx_slow()
+                } else {
+                    Some(tx)
+                }
+            } else {
+                std::mem::drop(current_tx); // avoid deadlock
+                self.select_tx_slow()
+            }
         } else {
-            None
+            std::mem::drop(current_tx); // avoid deadlock
+            self.select_tx_slow()
         }
     }
 
