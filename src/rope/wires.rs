@@ -141,6 +141,14 @@ impl UdpTransportStatus {
     pub fn is_timeout(&self, timeout: i64) -> bool {
         self.time_last_recv.saturating_sub(self.time_last_sent).abs() >= timeout
     }
+
+    pub fn new() -> Self {
+        UdpTransportStatus {
+            meter: NetworkMeter::new(),
+            time_last_recv: 0,
+            time_last_sent: 0,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -173,11 +181,7 @@ impl UdpTransport {
     pub fn new(socket: UdpSocket) -> Self {
         Self {
             socket: Arc::new(socket),
-            status: Arc::new(parking_lot::Mutex::new(UdpTransportStatus {
-                meter: NetworkMeter::new(),
-                time_last_recv: 0,
-                time_last_sent: 0,
-            })),
+            status: Arc::new(parking_lot::Mutex::new(UdpTransportStatus::new())),
         }
     }
 }
