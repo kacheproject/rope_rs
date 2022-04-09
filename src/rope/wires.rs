@@ -18,8 +18,14 @@ impl Tx {
             Tx::Udp((socket, addr)) => {
                 {
                     let mut stat = socket.status.lock();
+                    let time = chrono::Utc::now().timestamp();
+                    stat.time_last_sent = time;
+                    let timeout = stat.is_timeout(2);
                     let meter = &mut stat.meter;
-                    meter.note_tx(chrono::Utc::now().timestamp(), buf.len());
+                    meter.note_tx(time, buf.len());
+                    if timeout {
+                        meter.note_unavaliable(time);
+                    }
                 }
                 socket.send_to(buf, addr).await
             }
@@ -31,6 +37,21 @@ impl Tx {
                     Err(_) => Err(io::Error::from(io::ErrorKind::BrokenPipe)),
                 }
             }
+        }
+    }
+
+    pub fn get_availability(&self) -> f64 {
+        match self {
+            Tx::ChanPair(tx) => {
+                if !tx.is_closed() {
+                    1.0
+                } else {
+                    0.0
+                }
+            },
+            Tx::Udp((transport, _)) => {
+                transport.status.lock().meter.get_availability()
+            },
         }
     }
 }
@@ -48,8 +69,11 @@ impl Rx {
                 Ok((size, addr)) => {
                     {
                         let mut stat = socket.status.lock();
+                        let time = chrono::Utc::now().timestamp();
+                        stat.time_last_recv = time;
                         let meter = &mut stat.meter;
-                        meter.note_rx(chrono::Utc::now().timestamp(), size);
+                        meter.note_rx(time, size);
+                        meter.note_avaliable(time);
                     }
                     Result::Ok((size, Option::Some(addr)))
                 }
@@ -95,6 +119,14 @@ where
 #[derive(Debug)]
 struct UdpTransportStatus {
     meter: NetworkMeter,
+    time_last_sent: i64,
+    time_last_recv: i64,
+}
+
+impl UdpTransportStatus {
+    pub fn is_timeout(&self, timeout: i64) -> bool {
+        self.time_last_recv.saturating_sub(self.time_last_sent).abs() >= timeout
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -129,6 +161,8 @@ impl UdpTransport {
             socket: Arc::new(socket),
             status: Arc::new(parking_lot::Mutex::new(UdpTransportStatus {
                 meter: NetworkMeter::new(),
+                time_last_recv: 0,
+                time_last_sent: 0,
             })),
         }
     }
