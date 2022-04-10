@@ -142,6 +142,10 @@ impl Peer {
         let mut txs = self.txs.write();
         txs.push(Arc::from(tx));
     }
+
+    pub fn get_id(&self) -> u128 {
+        self.id
+    }
 }
 
 async fn router_routing_rx_thread_body(
@@ -368,6 +372,10 @@ impl Router {
         } else {
             Err(NewPeerError::BroadcastId)
         }
+    }
+
+    pub fn get_peers<'a>(&'a self) -> parking_lot::RwLockReadGuard<'a, Vec<Arc<Peer>>> {
+        self.peers.read()
     }
 
     /// Get a socket at port_number. Try to use an available port if port_number is zero.
