@@ -143,6 +143,10 @@ impl Peer {
         let mut txs = self.txs.write();
         txs.push(Arc::new(tx));
     }
+
+    pub fn get_id(&self) -> u128 {
+        self.id
+    }
 }
 
 async fn router_routing_rx_thread_body(
@@ -336,6 +340,10 @@ impl Router {
         }
     }
 
+    pub fn get_peers<'a>(&'a self) -> parking_lot::RwLockReadGuard<'a, Vec<Arc<Peer>>> {
+        self.peers.read()
+    }
+
     pub fn bind(self: Arc<Self>, port_number: u16, rx_backlog: usize) -> io::Result<Arc<Socket>> {
         let mut opened_sockets = self.opened_sockets.write();
         let port = if port_number == 0 {
@@ -470,6 +478,10 @@ impl Router {
                 }
             }
         });
+    }
+
+    pub fn get_id(&self) -> u128 {
+        self.id
     }
 }
 
