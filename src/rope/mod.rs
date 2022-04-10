@@ -336,6 +336,10 @@ impl Router {
         }
     }
 
+    /// Get a socket at port_number. Try to use an available port if port_number is zero.
+    /// Note: port_number <= 1023 is reserved for rope internal services.
+    /// ## Errors
+    /// - `AddrInUse`: no available ports
     pub fn bind(self: Arc<Self>, port_number: u16, rx_backlog: usize) -> io::Result<Arc<Socket>> {
         let mut opened_sockets = self.opened_sockets.write();
         let port = if port_number == 0 {
