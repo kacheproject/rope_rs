@@ -10,7 +10,7 @@ use std::ops::Deref;
 use std::sync::{Arc, Weak};
 use tokio::sync::mpsc;
 
-mod rpv6;
+pub mod rpv6;
 mod utils;
 mod wgdispatcher;
 use wgdispatcher::WireGuardDispatcher;
