@@ -248,6 +248,23 @@ async fn router_routing_rx_thread_body(
     info!("router({}) rx thread exit.", router_id);
 }
 
+async fn router_routing_thread(router_ref: Weak<Router>, mut consumer: mpsc::Receiver<Msg>) {
+    loop {
+        match consumer.recv().await {
+            Some(msg) => {
+                if let Some(router) = router_ref.upgrade() {
+                    let _ = router.route_packet(msg).await;
+                } else {
+                    break;
+                }
+            },
+            None => {
+                break;
+            }
+        }
+    }
+}
+
 pub struct Router {
     id: u128,
     static_private_key: Arc<X25519SecretKey>,
@@ -256,6 +273,7 @@ pub struct Router {
     opened_sockets: RwLock<HashMap<u16, (Weak<Socket>, ringbuf::Producer<Msg>)>>,
     wg_dispatcher: WireGuardDispatcher<Weak<Peer>>,
     raw_packet_tx: mpsc::Sender<(bytes::Bytes, ExternalAddr)>,
+    routing_msg_tx: mpsc::Sender<Msg>,
 }
 
 pub enum RoutingResult {
@@ -283,6 +301,7 @@ impl Router {
     pub fn new(id: u128, static_private_key: Arc<X25519SecretKey>) -> Arc<Self> {
         let static_public_key = Arc::new(static_private_key.clone().public_key());
         let (producer, consumer) = mpsc::channel(128);
+        let (routing_producer, routing_consumer) = mpsc::channel(128);
         let router = Arc::new(Self {
             id,
             static_private_key: static_private_key.clone(),
@@ -294,10 +313,15 @@ impl Router {
                 static_public_key.clone(),
             ),
             raw_packet_tx: producer,
+            routing_msg_tx: routing_producer,
         });
         tokio::spawn(router_routing_rx_thread_body(
             Arc::downgrade(&router),
             consumer,
+        ));
+        tokio::spawn(router_routing_thread(
+            Arc::downgrade(&router),
+            routing_consumer,
         ));
         router
     }
@@ -336,7 +360,7 @@ impl Router {
         }
     }
 
-    pub fn bind(self: Arc<Self>, port_number: u16, rx_backlog: usize) -> io::Result<Arc<Socket>> {
+    pub fn bind(&self, port_number: u16, rx_backlog: usize) -> io::Result<Arc<Socket>> {
         let mut opened_sockets = self.opened_sockets.write();
         let port = if port_number == 0 {
             match Self::find_avaliable_application_port(&mut opened_sockets) {
@@ -346,7 +370,12 @@ impl Router {
         } else {
             port_number
         };
-        let (socket, prod) = Socket::new(Arc::downgrade(&self), port, rx_backlog);
+        let (socket, prod) = Socket::new(
+            self.id,
+            port,
+            rx_backlog,
+            self.routing_msg_tx.clone(),
+        );
         opened_sockets.insert(port, (Arc::downgrade(&socket), prod));
         Ok(socket)
     }
@@ -473,39 +502,86 @@ impl Router {
     }
 }
 
+impl Drop for Router {
+    fn drop(&mut self) {
+        { // Clean up sockets: notify them before dropping
+            let mut opened_sockets = self.opened_sockets.write();
+            let mut iter = opened_sockets.iter();
+            loop {
+                if let Some((_, (sockref, _))) = iter.next() {
+                    if let Some(socket) = sockref.upgrade() {
+                        socket.set_router_dropped(true);
+                        socket.rx_notify.notify_waiters();
+                    }
+                } else {
+                    break;
+                }
+            }
+            opened_sockets.drain();
+        }
+    }
+}
+
+struct SockOpts {
+    router_dropped: bool,
+}
+
+impl SockOpts {
+    fn new() -> Self {
+        Self {
+            router_dropped: false,
+        }
+    }
+}
+
 pub struct Socket {
-    router: Weak<Router>,
+    router_id: u128,
     port: u16,
     rx_ringbuf_cons: Mutex<ringbuf::Consumer<Msg>>,
     rx_notify: tokio::sync::Notify,
+    tx: mpsc::Sender<Msg>,
+    opts: RwLock<SockOpts>,
 }
 
 impl Socket {
     fn new(
-        router: Weak<Router>,
+        router_id: u128,
         port: u16,
         rx_backlog: usize,
+        tx: mpsc::Sender<Msg>,
     ) -> (Arc<Self>, ringbuf::Producer<Msg>) {
         let (prod, cons) = ringbuf::RingBuffer::new(rx_backlog).split();
         (
             Arc::new(Self {
-                router,
+                router_id,
                 port,
                 rx_ringbuf_cons: Mutex::new(cons),
                 rx_notify: tokio::sync::Notify::new(),
+                tx,
+                opts: RwLock::new(SockOpts::new()),
             }),
             prod,
         )
     }
 
+    fn get_router_dropped(&self) -> bool {
+        self.opts.read().router_dropped
+    }
+
+    fn set_router_dropped(&self, value: bool) -> bool {
+        let mut opts = self.opts.write();
+        let old = opts.router_dropped;
+        opts.router_dropped = value;
+        old
+    }
+
     /// Try pop a packet up from ring buffer.
-    /// Return WouldBlock if no packet in the buffer, or BrokenPipe when the router had been dropped.
+    /// Return WouldBlock if no packet in the buffer.
     fn try_recv(&self) -> io::Result<Msg> {
         let mut ringbuf = self.rx_ringbuf_cons.lock();
         if let Some(data) = ringbuf.pop() {
             Ok(data)
         } else {
-            let _ = self.upgrade_router_ref()?;
             Err(io::ErrorKind::WouldBlock.into())
         }
     }
@@ -515,19 +591,15 @@ impl Socket {
             match self.try_recv() {
                 Ok(packet) => break Ok(packet),
                 Err(e) => if e.kind() == io::ErrorKind::WouldBlock {
-                    self.rx_notify.notified().await;
+                    if !self.get_router_dropped() {
+                        self.rx_notify.notified().await;
+                    } else {
+                        break Err(io::ErrorKind::BrokenPipe.into())
+                    }
                 } else {
                     break Err(e);
                 }
             }
-        }
-    }
-
-    fn upgrade_router_ref(&self) -> io::Result<Arc<Router>> {
-        if let Some(router) = self.router.upgrade() {
-            Ok(router)
-        } else {
-            Err(io::ErrorKind::BrokenPipe.into())
         }
     }
 
@@ -538,22 +610,9 @@ impl Socket {
 
     pub async fn send_msg(&self, msg: Msg) -> io::Result<()> {
         let header = msg.get_header();
-        match self.upgrade_router_ref()?.route_packet(msg).await {
-            RoutingResult::Ok => Ok(()),
-            RoutingResult::IOE(e) => Err(e),
-            RoutingResult::BrokenPipe => Err(io::Error::from(io::ErrorKind::BrokenPipe)),
-            RoutingResult::QueueFull => {
-                warn!("({}) Queue is full.", self.get_local_port());
-                Ok(())
-            } // drop in slient
-            RoutingResult::UnboundPort => {
-                warn!("Unbound port {}.", header.dst_port);
-                Ok(())
-            }
-            RoutingResult::NoDest => {
-                warn!("No destination avaliable for {}.", header.dst_addr_int());
-                Ok(())
-            }
+        match self.tx.send(msg).await {
+            Ok(_) => Ok(()),
+            Err(_) => Err(io::ErrorKind::BrokenPipe.into())
         }
     }
 
@@ -571,7 +630,7 @@ impl Socket {
                 self.port,
                 buf_len,
                 dst_port,
-                self.upgrade_router_ref()?.id,
+                self.router_id,
                 dst_addr,
             ),
             buf,
