@@ -16,6 +16,10 @@ impl Default for MsgOpts {
     }
 }
 
+/// Msg is used to track local options for a packet.
+/// Most functions of BoxedPacket can be applied here. Some of them may be overrided for better experience.
+/// ## Avaliable options
+/// - `src_external_addr` is the source address of the physical network.
 #[derive(Debug, Clone)]
 pub struct Msg {
     packet: BoxedPacket,
@@ -38,16 +42,22 @@ impl Msg {
         }
     }
 
+    /// Set `src_external_addr`.
+    /// This option help application identify the source address of the physical network.
+    /// In most cases it's set by the router, before routing the packet.
     pub fn set_src_external_addr<'a>(&'a mut self, new_addr: ExternalAddr) -> ExternalAddr {
         let old = self.opts.src_external_addr;
         self.opts.src_external_addr = new_addr;
         old
     }
 
+    /// Get `src_external_addr`.
+    /// This option help application identify the source address of the physical network.
     pub fn get_src_external_addr(&self) -> ExternalAddr {
         self.opts.src_external_addr
     }
 
+    /// Consume this message and return a new message with new RPv6 header and same option.
     pub fn replace_header(self, header: Header) -> Self {
         let new_packet = self.packet.replace_header(header);
         Self {
