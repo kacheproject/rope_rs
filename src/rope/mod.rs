@@ -144,6 +144,12 @@ impl Peer {
         txs.push(Arc::new(tx));
     }
 
+    pub fn clear_tx(&self) {
+        let mut txs = self.txs.write();
+        txs.clear();
+        txs.shrink_to(0);
+    }
+
     pub fn get_id(&self) -> u128 {
         self.id
     }
