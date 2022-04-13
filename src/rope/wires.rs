@@ -4,6 +4,7 @@ use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::sync::{mpsc, Mutex};
 
+use super::ExternalAddr;
 use super::netmeter::NetworkMeter;
 
 #[derive(Debug, Clone)]
@@ -65,6 +66,18 @@ impl Tx {
                 let is_receiving = chrono::Utc::now().timestamp().saturating_sub(status.time_last_recv) > 300; // 5 mins
                 let is_timeout = status.is_timeout(300);
                 is_receiving && is_timeout
+            }
+        }
+    }
+
+    pub fn is_match_addr(&self, addr: ExternalAddr) -> bool {
+        match self {
+            Tx::ChanPair(_) => false,
+            Tx::Udp((_, txaddr)) => {
+                match addr {
+                    ExternalAddr::Udp(sockaddr) => sockaddr == *txaddr,
+                    _ => false
+                }
             }
         }
     }
