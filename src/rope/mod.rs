@@ -153,6 +153,18 @@ impl Peer {
     pub fn get_id(&self) -> u128 {
         self.id
     }
+
+    pub fn find_tx_of_addr(&self, exaddr: ExternalAddr) -> Option<Arc<Tx>> {
+        let txs = self.txs.read();
+        let mut result = None;
+        for tx in txs.iter() {
+            if tx.is_match_addr(exaddr) {
+                result =  Some(tx.clone());
+                break;
+            }
+        }
+        result
+    }
 }
 
 async fn router_routing_rx_thread_body(
