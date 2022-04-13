@@ -25,9 +25,9 @@ async fn router_local_hello_test() {
     initialize();
     let r0_sk = Arc::new(X25519SecretKey::new());
     let r0 = Router::new(0, r0_sk);
-    let sock0 = r0.clone().bind(0, 16).unwrap();
+    let sock0 = r0.bind(0, 16).unwrap();
     let port0 = sock0.get_local_port();
-    let sock1 = r0.clone().bind(0, 16).unwrap();
+    let sock1 = r0.bind(0, 16).unwrap();
     tokio::spawn(async move {
         sock1.send_to(0, port0, "Hello World!".as_bytes(), 0).await.unwrap();
     });
@@ -42,9 +42,9 @@ async fn router_remote_hello_test() {
     let r1_sk = Arc::new(X25519SecretKey::new());
     let r0 = Router::new(1, r0_sk.clone());
     let r1 = Router::new(2, r1_sk.clone());
-    let sock0 = r0.clone().bind(0, 16).unwrap();
+    let sock0 = r0.bind(0, 16).unwrap();
     let port0 = sock0.get_local_port();
-    let sock1 = r1.clone().bind(0, 16).unwrap();
+    let sock1 = r1.bind(0, 16).unwrap();
     let port1 = sock1.get_local_port();
     let peer0 = r1.new_peer(1, Arc::new(r0_sk.public_key())).unwrap();
     let peer1 = r0.new_peer(2, Arc::new(r1_sk.public_key())).unwrap();
