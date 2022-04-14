@@ -29,9 +29,9 @@ pub type Msg = msg::Msg;
 pub struct Peer {
     id: u128,
     static_public_key: Arc<X25519PublicKey>,
-    txs: RwLock<Vec<Arc<Tx>>>,
+    txs: RwLock<Vec<Arc<dyn Tx>>>,
     wgtunn: Arc<Tunn>,
-    current_tx: Mutex<Option<Weak<Tx>>>,
+    current_tx: Mutex<Option<Weak<dyn Tx>>>,
 }
 
 pub enum EncryptedSendError {
@@ -71,10 +71,10 @@ impl Peer {
 
     /// Scan all txs and choose one with largest availability.
     /// This function will hold lock on .current_tx and read-write lock on .txs.
-    fn select_tx_slow(&self) -> Option<Arc<Tx>> {
+    fn select_tx_slow(&self) -> Option<Arc<dyn Tx>> {
         self.gc_tx();
         let txs = self.txs.read();
-        let best_tx = txs.iter().fold(None, |prev: Option<&Arc<Tx>>, next| match prev {
+        let best_tx = txs.iter().fold(None, |prev: Option<&Arc<dyn Tx>>, next| match prev {
             Some(prev_tx) => if next.get_availability() > prev_tx.get_availability() { Some(next) } else { Some(prev_tx) },
             None => Some(next)
         }).cloned();
@@ -86,7 +86,7 @@ impl Peer {
         best_tx
     }
 
-    fn select_tx(&self) -> Option<Arc<Tx>> {
+    fn select_tx(&self) -> Option<Arc<dyn Tx>> {
         let current_tx = self.current_tx.lock();
         if let Some(tx_weakref) = current_tx.deref() {
             if let Some(tx) = tx_weakref.upgrade() {
@@ -139,9 +139,9 @@ impl Peer {
         }
     }
 
-    pub fn add_tx(&self, tx: Tx) {
+    pub fn add_tx(&self, tx: Box<dyn Tx>) {
         let mut txs = self.txs.write();
-        txs.push(Arc::new(tx));
+        txs.push(Arc::from(tx));
     }
 }
 

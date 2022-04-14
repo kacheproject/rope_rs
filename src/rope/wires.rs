@@ -1,3 +1,5 @@
+use async_trait::async_trait;
+use std::fmt::Debug;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -6,68 +8,103 @@ use tokio::sync::{mpsc, Mutex};
 
 use super::netmeter::NetworkMeter;
 
-#[derive(Debug, Clone)]
-pub enum Tx {
-    Udp((UdpTransport, <UdpTransport as Transport>::Addr)),
-    ChanPair(mpsc::Sender<Box<[u8]>>),
+#[async_trait]
+pub trait Tx: Debug + Send + Sync {
+    async fn send_to(&self, buf: &[u8]) -> io::Result<usize>;
+
+    fn get_availability(&self) -> f64;
+
+    fn is_removable(&self) -> bool;
 }
 
-impl Tx {
-    pub async fn send_to(&self, buf: &[u8]) -> io::Result<usize> {
-        match self {
-            Tx::Udp((socket, addr)) => {
-                {
-                    let mut stat = socket.status.lock();
-                    let time = chrono::Utc::now().timestamp();
-                    stat.time_last_sent = time;
-                    let timeout = stat.is_timeout(2);
-                    let meter = &mut stat.meter;
-                    meter.note_tx(time, buf.len());
-                    if timeout {
-                        meter.note_unavaliable(time);
-                    }
-                }
-                socket.send_to(buf, addr).await
+#[derive(Debug)]
+pub struct UdpTx {
+    transport: UdpTransport,
+    dst_addr: SocketAddr,
+}
+
+impl UdpTx {
+    pub fn new(transport: UdpTransport, dst_addr: SocketAddr) -> Self {
+        Self {
+            transport,
+            dst_addr,
+        }
+    }
+}
+
+#[async_trait]
+impl Tx for UdpTx {
+    async fn send_to(
+        &self,
+        buf: &[u8],
+    ) -> io::Result<usize>
+    {
+        let socket = &self.transport;
+        let addr = &self.dst_addr;
+        {
+            let mut stat = socket.status.lock();
+            let time = chrono::Utc::now().timestamp();
+            stat.time_last_sent = time;
+            let timeout = stat.is_timeout(2);
+            let meter = &mut stat.meter;
+            meter.note_tx(time, buf.len());
+            if timeout {
+                meter.note_unavaliable(time);
             }
-            Tx::ChanPair(tx) => {
-                let boxed_slice = Vec::from(buf).into_boxed_slice();
-                let size = buf.len();
-                match tx.send(boxed_slice).await {
-                    Ok(_) => Ok(size),
-                    Err(_) => Err(io::Error::from(io::ErrorKind::BrokenPipe)),
-                }
-            }
+        }
+        socket.send_to(buf, addr).await
+    }
+
+    fn get_availability(&self) -> f64 {
+        self.transport.status.lock().meter.get_availability()
+    }
+
+    fn is_removable(&self) -> bool {
+        let transport = &self.transport;
+        let status = transport.status.lock();
+        let is_receiving = chrono::Utc::now().timestamp().saturating_sub(status.time_last_recv) > 300; // 5 mins
+        let is_timeout = status.is_timeout(300);
+        is_receiving && is_timeout
+    }
+}
+
+#[derive(Debug)]
+pub struct ChanPairTx { tx: mpsc::Sender<Box<[u8]>> }
+
+impl ChanPairTx {
+    pub fn new(tx: mpsc::Sender<Box<[u8]>>) -> Self {
+        Self {
+            tx,
+        }
+    }
+}
+
+#[async_trait]
+impl Tx for ChanPairTx {
+    async fn send_to(&self, buf: &[u8]) -> io::Result<usize> {
+        let tx = &self.tx;
+        let boxed_slice = Vec::from(buf).into_boxed_slice();
+        let size = buf.len();
+        match tx.send(boxed_slice).await {
+            Ok(_) => Ok(size),
+            Err(_) => Err(io::Error::from(io::ErrorKind::BrokenPipe)),
         }
     }
 
-    pub fn get_availability(&self) -> f64 {
-        match self {
-            Tx::ChanPair(tx) => {
-                if !tx.is_closed() {
-                    1.0
-                } else {
-                    0.0
-                }
-            },
-            Tx::Udp((transport, _)) => {
-                transport.status.lock().meter.get_availability()
-            },
+
+    fn get_availability(&self) -> f64 {
+        if !self.tx.is_closed() {
+            1.0
+        } else {
+            0.0
         }
     }
 
-    pub fn is_removable(&self) -> bool {
-        match self {
-            Tx::ChanPair(tx) => {
-                tx.is_closed()
-            },
-            Tx::Udp((transport, _)) => {
-                let status = transport.status.lock();
-                let is_receiving = chrono::Utc::now().timestamp().saturating_sub(status.time_last_recv) > 300; // 5 mins
-                let is_timeout = status.is_timeout(300);
-                is_receiving && is_timeout
-            }
-        }
+
+    fn is_removable(&self) -> bool {
+        self.tx.is_closed()
     }
+
 }
 
 #[derive(Debug)]
@@ -116,7 +153,7 @@ where
 {
     type Addr;
 
-    fn create_tx(&self, addr: Self::Addr) -> Tx;
+    fn create_tx(&self, addr: Self::Addr) -> Box<dyn Tx>;
 
     fn create_rx(&self) -> Rx;
 }
@@ -126,7 +163,7 @@ pub trait ConnectedTransport
 where
     Self: Sized,
 {
-    fn create_tx(&self) -> Tx;
+    fn create_tx(&self) -> Box<dyn Tx>;
     fn create_rx(&self) -> Rx;
 }
 
@@ -139,7 +176,10 @@ struct UdpTransportStatus {
 
 impl UdpTransportStatus {
     pub fn is_timeout(&self, timeout: i64) -> bool {
-        self.time_last_recv.saturating_sub(self.time_last_sent).abs() >= timeout
+        self.time_last_recv
+            .saturating_sub(self.time_last_sent)
+            .abs()
+            >= timeout
     }
 
     pub fn new() -> Self {
@@ -168,8 +208,8 @@ impl std::ops::Deref for UdpTransport {
 impl Transport for UdpTransport {
     type Addr = SocketAddr;
 
-    fn create_tx(&self, addr: SocketAddr) -> Tx {
-        Tx::Udp((self.clone(), addr))
+    fn create_tx(&self, addr: SocketAddr) -> Box<dyn Tx> {
+        Box::new(UdpTx::new(self.clone(), addr))
     }
 
     fn create_rx(&self) -> Rx {
@@ -193,8 +233,8 @@ pub struct InprocTransport {
 }
 
 impl ConnectedTransport for InprocTransport {
-    fn create_tx(&self) -> Tx {
-        Tx::ChanPair(self.sender.clone())
+    fn create_tx(&self) -> Box<dyn Tx> {
+        Box::new(ChanPairTx::new(self.sender.clone()))
     }
 
     fn create_rx(&self) -> Rx {
