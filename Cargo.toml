@@ -23,3 +23,8 @@ async-trait = "0.1"
 
 [dev-dependencies]
 simple_logger = { version = "2.1", features = ["stderr"] }
+
+[features]
+default = ["transports_udp"]
+transports = []
+transports_udp = ["transports"]
