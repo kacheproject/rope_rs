@@ -472,21 +472,15 @@ impl Router {
         }
     }
 
-    pub fn attach_rx(&self, rx: Rx) {
+    pub fn attach_rx(&self, rx: Box<dyn Rx>) {
         let sender = self.raw_packet_tx.clone();
         tokio::spawn(async move {
             loop {
                 let mut buf = bytes::BytesMut::new();
                 buf.resize(65535, 0);
                 match rx.recv_from(&mut buf).await {
-                    Ok((size, addr)) => {
+                    Ok((size, exaddr)) => {
                         buf.resize(size, 0);
-                        let exaddr = if let Some(raddr) = addr {
-                            match &rx {
-                                Rx::Udp(_) => ExternalAddr::Udp(raddr),
-                                Rx::ChanPair(_) => ExternalAddr::None,
-                            }
-                        } else { ExternalAddr::None };
                         match sender.send((buf.freeze(), exaddr)).await {
                             Ok(_) => {},
                             Err(_) => break,

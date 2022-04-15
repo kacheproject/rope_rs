@@ -6,7 +6,9 @@ use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::sync::{mpsc, Mutex};
 
+
 use super::netmeter::NetworkMeter;
+use super::ExternalAddr;
 
 #[async_trait]
 pub trait Tx: Debug + Send + Sync {
@@ -107,41 +109,58 @@ impl Tx for ChanPairTx {
 
 }
 
-#[derive(Debug)]
-pub enum Rx {
-    Udp(UdpTransport),
-    ChanPair(Arc<Mutex<mpsc::Receiver<Box<[u8]>>>>),
+#[async_trait]
+pub trait Rx: Debug + Send + Sync {
+    async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, ExternalAddr)>;
 }
 
-impl Rx {
-    pub async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, Option<SocketAddr>)> {
-        match self {
-            Rx::Udp(socket) => match socket.recv_from(buf).await {
-                Ok((size, addr)) => {
-                    {
-                        let mut stat = socket.status.lock();
-                        let time = chrono::Utc::now().timestamp();
-                        stat.time_last_recv = time;
-                        let meter = &mut stat.meter;
-                        meter.note_rx(time, size);
-                        meter.note_avaliable(time);
-                    }
-                    Result::Ok((size, Option::Some(addr)))
+#[derive(Debug)]
+pub struct UdpTransportRx {
+    transport: UdpTransport
+}
+
+impl UdpTransportRx {
+    pub fn new(transport: UdpTransport) -> Self {
+        Self {
+            transport,
+        }
+    }
+}
+
+#[async_trait]
+impl Rx for UdpTransportRx {
+    async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, ExternalAddr)> {
+        match self.transport.recv_from(buf).await {
+            Ok((size, addr)) => {
+                {
+                    let mut stat = self.transport.status.lock();
+                    let time = chrono::Utc::now().timestamp();
+                    stat.time_last_recv = time;
+                    let meter = &mut stat.meter;
+                    meter.note_rx(time, size);
+                    meter.note_avaliable(time);
                 }
-                Err(e) => Result::Err(e),
-            },
-            Rx::ChanPair(rx_mutex) => {
-                let mut rx = rx_mutex.lock().await;
-                if let Some(data) = rx.recv().await {
-                    let copy_size = std::cmp::min(data.len(), buf.len());
-                    for i in 0..copy_size {
-                        buf[i] = data[i]
-                    }
-                    Ok((data.len(), Option::None))
-                } else {
-                    Err(io::Error::from(io::ErrorKind::BrokenPipe))
-                }
+                Result::Ok((size, ExternalAddr::Udp(addr)))
             }
+            Err(e) => Result::Err(e),
+        }
+    }
+}
+
+pub type ChanPairRx = Arc<Mutex<mpsc::Receiver<Box<[u8]>>>>;
+
+#[async_trait]
+impl Rx for ChanPairRx {
+    async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, ExternalAddr)> {
+        let mut rx = self.lock().await;
+        if let Some(data) = rx.recv().await {
+            let copy_size = std::cmp::min(data.len(), buf.len());
+            for i in 0..copy_size {
+                buf[i] = data[i]
+            }
+            Ok((data.len(), ExternalAddr::None))
+        } else {
+            Err(io::Error::from(io::ErrorKind::BrokenPipe))
         }
     }
 }
@@ -155,7 +174,7 @@ where
 
     fn create_tx(&self, addr: Self::Addr) -> Box<dyn Tx>;
 
-    fn create_rx(&self) -> Rx;
+    fn create_rx(&self) -> Box<dyn Rx>;
 }
 
 /// ConnectedTransport is for two way connected data delivery methods.
@@ -164,7 +183,7 @@ where
     Self: Sized,
 {
     fn create_tx(&self) -> Box<dyn Tx>;
-    fn create_rx(&self) -> Rx;
+    fn create_rx(&self) -> Box<dyn Rx>;
 }
 
 #[derive(Debug)]
@@ -212,8 +231,8 @@ impl Transport for UdpTransport {
         Box::new(UdpTx::new(self.clone(), addr))
     }
 
-    fn create_rx(&self) -> Rx {
-        Rx::Udp(self.clone())
+    fn create_rx(&self) -> Box<dyn Rx> {
+        Box::new(UdpTransportRx::new(self.clone()))
     }
 }
 
@@ -237,7 +256,7 @@ impl ConnectedTransport for InprocTransport {
         Box::new(ChanPairTx::new(self.sender.clone()))
     }
 
-    fn create_rx(&self) -> Rx {
-        Rx::ChanPair(self.receiver.clone())
+    fn create_rx(&self) -> Box<dyn Rx> {
+        Box::new(self.receiver.clone())
     }
 }
