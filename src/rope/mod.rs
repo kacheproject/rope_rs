@@ -6,7 +6,6 @@ use parking_lot::{Mutex, RwLock};
 use rpv6::{BoxedPacket, Packet};
 use std::collections::HashMap;
 use std::io;
-use std::net::SocketAddr;
 use std::ops::Deref;
 use std::sync::{Arc, Weak};
 use tokio::sync::mpsc;
@@ -19,7 +18,7 @@ pub mod wires;
 use wires::*;
 
 use self::wgdispatcher::NewTunnelError;
-mod netmeter;
+pub mod netmeter;
 mod exaddr;
 pub type ExternalAddr = exaddr::ExternalAddr;
 mod msg;
@@ -29,9 +28,9 @@ pub type Msg = msg::Msg;
 pub struct Peer {
     id: u128,
     static_public_key: Arc<X25519PublicKey>,
-    txs: RwLock<Vec<Arc<Tx>>>,
+    txs: RwLock<Vec<Arc<dyn Tx>>>,
     wgtunn: Arc<Tunn>,
-    current_tx: Mutex<Option<Weak<Tx>>>,
+    current_tx: Mutex<Option<Weak<dyn Tx>>>,
 }
 
 pub enum EncryptedSendError {
@@ -71,10 +70,10 @@ impl Peer {
 
     /// Scan all txs and choose one with largest availability.
     /// This function will hold lock on .current_tx and read-write lock on .txs.
-    fn select_tx_slow(&self) -> Option<Arc<Tx>> {
+    fn select_tx_slow(&self) -> Option<Arc<dyn Tx>> {
         self.gc_tx();
         let txs = self.txs.read();
-        let best_tx = txs.iter().fold(None, |prev: Option<&Arc<Tx>>, next| match prev {
+        let best_tx = txs.iter().fold(None, |prev: Option<&Arc<dyn Tx>>, next| match prev {
             Some(prev_tx) => if next.get_availability() > prev_tx.get_availability() { Some(next) } else { Some(prev_tx) },
             None => Some(next)
         }).cloned();
@@ -86,7 +85,7 @@ impl Peer {
         best_tx
     }
 
-    fn select_tx(&self) -> Option<Arc<Tx>> {
+    fn select_tx(&self) -> Option<Arc<dyn Tx>> {
         let current_tx = self.current_tx.lock();
         if let Some(tx_weakref) = current_tx.deref() {
             if let Some(tx) = tx_weakref.upgrade() {
@@ -139,9 +138,9 @@ impl Peer {
         }
     }
 
-    pub fn add_tx(&self, tx: Tx) {
+    pub fn add_tx(&self, tx: Box<dyn Tx>) {
         let mut txs = self.txs.write();
-        txs.push(Arc::new(tx));
+        txs.push(Arc::from(tx));
     }
 
     pub fn clear_tx(&self) {
@@ -154,7 +153,7 @@ impl Peer {
         self.id
     }
 
-    pub fn find_tx_of_addr(&self, exaddr: ExternalAddr) -> Option<Arc<Tx>> {
+    pub fn find_tx_of_addr(&self, exaddr: ExternalAddr) -> Option<Arc<dyn Tx>> {
         let txs = self.txs.read();
         let mut result = None;
         for tx in txs.iter() {
@@ -321,6 +320,9 @@ impl From<NewTunnelError> for NewPeerError {
 
 impl Router {
     pub fn new(id: u128, static_private_key: Arc<X25519SecretKey>) -> Arc<Self> {
+        if id == 0 {
+            panic!("Router could not use id 0");
+        }
         let static_public_key = Arc::new(static_private_key.clone().public_key());
         let (producer, consumer) = mpsc::channel(128);
         let (routing_producer, routing_consumer) = mpsc::channel(128);
@@ -498,21 +500,15 @@ impl Router {
         }
     }
 
-    pub fn attach_rx(&self, rx: Rx) {
+    pub fn attach_rx(&self, rx: Box<dyn Rx>) {
         let sender = self.raw_packet_tx.clone();
         tokio::spawn(async move {
             loop {
                 let mut buf = bytes::BytesMut::new();
                 buf.resize(65535, 0);
                 match rx.recv_from(&mut buf).await {
-                    Ok((size, addr)) => {
+                    Ok((size, exaddr)) => {
                         buf.resize(size, 0);
-                        let exaddr = if let Some(raddr) = addr {
-                            match &rx {
-                                Rx::Udp(_) => ExternalAddr::Udp(raddr),
-                                Rx::ChanPair(_) => ExternalAddr::None,
-                            }
-                        } else { ExternalAddr::None };
                         match sender.send((buf.freeze(), exaddr)).await {
                             Ok(_) => {},
                             Err(_) => break,
@@ -643,7 +639,6 @@ impl Socket {
     }
 
     pub async fn send_msg(&self, msg: Msg) -> io::Result<()> {
-        let header = msg.get_header();
         match self.tx.send(msg).await {
             Ok(_) => Ok(()),
             Err(_) => Err(io::ErrorKind::BrokenPipe.into())

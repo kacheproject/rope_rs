@@ -22,10 +22,14 @@ itertools = "0.10"
 rmp-serde = {version = "1.0", optional = true}
 url = {version = "2.2", features = ["serde"], optional = true}
 serde = { version = "1.0", features = ["derive"], optional = true}
+async-trait = "0.1"
 
 [dev-dependencies]
 simple_logger = { version = "2.1", features = ["stderr"] }
 
 [features]
-default = ["peer_discovery"]
+default = ["transports_udp", "transports_inproc", "peer_discovery"]
 peer_discovery = ["rmp-serde", "url", "serde"]
+transports = []
+transports_udp = ["transports"]
+transports_inproc = ["transports"]

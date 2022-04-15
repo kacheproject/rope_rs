@@ -35,3 +35,12 @@ impl From<ExternalAddr> for Option<std::net::SocketAddr> {
         (&value).into()
     }
 }
+
+impl ExternalAddr {
+    pub fn protocol<'a>(&'a self) -> &'a str {
+        match self {
+            Self::None => "none",
+            Self::Udp(_) => "udp",
+        }
+    }
+}

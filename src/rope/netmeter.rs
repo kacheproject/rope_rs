@@ -1,4 +1,3 @@
-use std::time::Duration;
 use arrayvec::ArrayVec;
 use average::MeanWithError;
 use itertools::Itertools;

@@ -1,6 +1,7 @@
-use crate::rope::wires::{Transport, UdpTransport};
+use crate::rope::wires::{Transport, Tx};
 use crate::rope::{rpv6, Router, Socket, ExternalAddr};
 use log::*;
+use std::collections::HashMap;
 use std::io;
 
 use std::sync::{Arc, Weak};
@@ -9,11 +10,14 @@ use self::proto::{CopiedProtocolMessage, ProtocolMessage, SyncContent};
 
 mod proto;
 
+pub trait DefaultTransport: std::fmt::Debug + Sync + Send {
+    fn create_tx_from_exaddr(&self, addr: ExternalAddr) -> Result<Box<dyn Tx>, &'static str>;
+}
 
 pub struct PeerDiscoveryServ {
     router: Weak<Router>,
     socket: Arc<Socket>,
-    default_udp_transport: Option<UdpTransport>,
+    default_transports: HashMap<String, Arc<dyn DefaultTransport>>,
 }
 
 impl PeerDiscoveryServ {
@@ -21,12 +25,12 @@ impl PeerDiscoveryServ {
         self.router.upgrade()
     }
 
-    pub fn new(router: Arc<Router>, backlog: usize, default_udp_transport: Option<UdpTransport>) -> Arc<Self> {
+    pub fn new(router: Arc<Router>, backlog: usize) -> Arc<Self> {
         let socket = router.clone().bind(6, backlog).unwrap(); // The error is impossible in paper
         let obj = Arc::new(Self {
             router: Arc::downgrade(&router),
             socket,
-            default_udp_transport,
+            default_transports: HashMap::new(),
         });
         tokio::spawn(socket_handler(obj.clone()));
         obj
@@ -105,13 +109,11 @@ fn handle_nd_bye(pdserv: Arc<PeerDiscoveryServ>, src_peer_id: u128) -> Result<()
 fn add_external_addr_as_tx(pdserv: &PeerDiscoveryServ, router: &Router, src_addr: u128, exaddr: ExternalAddr) {
     if let Some(peer) = router.find_peer_by_id(src_addr) {
         if let None = peer.find_tx_of_addr(exaddr) {
-            match exaddr {
-                ExternalAddr::Udp(sockaddr) => {
-                    if let Some(udp_transport) = &pdserv.default_udp_transport {
-                        peer.add_tx(udp_transport.create_tx(sockaddr));
-                    }
-                },
-                _ => {},
+            if let Some(default_transport) = pdserv.default_transports.get(exaddr.protocol()) {
+                match default_transport.create_tx_from_exaddr(exaddr) {
+                    Ok(tx) => peer.add_tx(tx),
+                    Err(e) => error!("default transport {:?} could not create tx from external addr {:?}: {:?}", default_transport, exaddr, e),
+                }
             }
         }
     }
