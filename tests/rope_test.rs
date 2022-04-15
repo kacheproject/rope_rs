@@ -24,12 +24,12 @@ pub fn initialize() {
 async fn router_local_hello_test() {
     initialize();
     let r0_sk = Arc::new(X25519SecretKey::new());
-    let r0 = Router::new(0, r0_sk);
+    let r0 = Router::new(1, r0_sk);
     let sock0 = r0.bind(0, 16).unwrap();
     let port0 = sock0.get_local_port();
     let sock1 = r0.bind(0, 16).unwrap();
     tokio::spawn(async move {
-        sock1.send_to(0, port0, "Hello World!".as_bytes(), 0).await.unwrap();
+        sock1.send_to(1, port0, "Hello World!".as_bytes(), 0).await.unwrap();
     });
     let packet = sock0.recv_packet().await.unwrap();
     assert_eq!(packet.get_payload(), "Hello World!".as_bytes());

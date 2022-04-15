@@ -299,6 +299,9 @@ impl From<NewTunnelError> for NewPeerError {
 
 impl Router {
     pub fn new(id: u128, static_private_key: Arc<X25519SecretKey>) -> Arc<Self> {
+        if id == 0 {
+            panic!("Router could not use id 0");
+        }
         let static_public_key = Arc::new(static_private_key.clone().public_key());
         let (producer, consumer) = mpsc::channel(128);
         let (routing_producer, routing_consumer) = mpsc::channel(128);
