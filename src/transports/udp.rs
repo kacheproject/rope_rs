@@ -125,6 +125,18 @@ impl UdpTransport {
     }
 }
 
+#[cfg(feature = "peer_discovery")]
+impl crate::peer_discovery::DefaultTransport for UdpTransport {
+    fn create_tx_from_exaddr(&self, addr: ExternalAddr) -> Result<Box<dyn Tx>, &'static str> {
+        match addr {
+            ExternalAddr::Udp(sockaddr) => {
+                Ok(self.create_tx(sockaddr))
+            },
+            _ => Err("unexpected protocol")
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct UdpTransportRx {
     transport: UdpTransport
