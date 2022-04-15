@@ -81,19 +81,6 @@ impl<T: Clone> WireGuardDispatcher<T> {
         }
     }
 
-    pub fn new_tunnel_and_set(
-        &self,
-        peer_pk: Arc<X25519PublicKey>,
-        preshared_key: Option<[u8; 32]>,
-        presistent_keepalive: Option<u16>,
-        user_value: T,
-    ) -> Result<(u32, Arc<Tunn>), NewTunnelError> {
-        let idx = self.next_idx()?;
-        let tunn = self.new_tunnel(idx, peer_pk, preshared_key, presistent_keepalive)?;
-        self.set_tunnel(idx, tunn.clone(), user_value);
-        Ok((idx, tunn))
-    }
-
     pub fn next_idx(&self) -> Result<u32, NewTunnelError> {
         if let Some(idx) = self.counter.lock().next() {
             Ok(idx)

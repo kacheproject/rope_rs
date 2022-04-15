@@ -1,10 +1,6 @@
 use async_trait::async_trait;
 use std::fmt::Debug;
 use std::io;
-use std::net::SocketAddr;
-use std::sync::Arc;
-use tokio::net::UdpSocket;
-use tokio::sync::{mpsc, Mutex};
 
 
 use super::ExternalAddr;

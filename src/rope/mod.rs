@@ -6,7 +6,6 @@ use parking_lot::{Mutex, RwLock};
 use rpv6::{BoxedPacket, Packet};
 use std::collections::HashMap;
 use std::io;
-use std::net::SocketAddr;
 use std::ops::Deref;
 use std::sync::{Arc, Weak};
 use tokio::sync::mpsc;
@@ -610,7 +609,6 @@ impl Socket {
     }
 
     pub async fn send_msg(&self, msg: Msg) -> io::Result<()> {
-        let header = msg.get_header();
         match self.tx.send(msg).await {
             Ok(_) => Ok(()),
             Err(_) => Err(io::ErrorKind::BrokenPipe.into())
