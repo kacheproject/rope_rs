@@ -108,9 +108,9 @@ fn handle_nd_bye(pdserv: Arc<PeerDiscoveryServ>, src_peer_id: u128) -> Result<()
 
 fn add_external_addr_as_tx(pdserv: &PeerDiscoveryServ, router: &Router, src_addr: u128, exaddr: ExternalAddr) {
     if let Some(peer) = router.find_peer_by_id(src_addr) {
-        if let None = peer.find_tx_of_addr(exaddr) {
+        if let None = peer.find_tx_of_addr(exaddr.clone()) {
             if let Some(default_transport) = pdserv.default_transports.get(exaddr.protocol()) {
-                match default_transport.create_tx_from_exaddr(exaddr) {
+                match default_transport.create_tx_from_exaddr(exaddr.clone()) {
                     Ok(tx) => peer.add_tx(tx),
                     Err(e) => error!("default transport {:?} could not create tx from external addr {:?}: {:?}", default_transport, exaddr, e),
                 }

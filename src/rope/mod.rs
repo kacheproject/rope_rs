@@ -19,7 +19,7 @@ use wires::*;
 
 use self::wgdispatcher::NewTunnelError;
 pub mod netmeter;
-mod exaddr;
+pub mod exaddr;
 pub type ExternalAddr = exaddr::ExternalAddr;
 mod msg;
 
@@ -157,7 +157,7 @@ impl Peer {
         let txs = self.txs.read();
         let mut result = None;
         for tx in txs.iter() {
-            if tx.is_match_addr(exaddr) {
+            if tx.is_match_addr(exaddr.clone()) {
                 result =  Some(tx.clone());
                 break;
             }
@@ -199,7 +199,7 @@ async fn router_routing_rx_thread_body(
                                             match BoxedPacket::parse(Vec::from(data)) {
                                                 Ok(packet) => {
                                                     let mut msg = Msg::new(packet);
-                                                    msg.set_src_external_addr(sockaddr);
+                                                    msg.set_src_external_addr(sockaddr.clone());
                                                     let _ = router.route_packet(msg).await;
                                                 }
                                                 Result::Err(e) => {
@@ -235,7 +235,7 @@ async fn router_routing_rx_thread_body(
                                             match BoxedPacket::parse(Vec::from(data)) {
                                                 Ok(packet) => {
                                                     let mut msg = Msg::new(packet);
-                                                    msg.set_src_external_addr(sockaddr);
+                                                    msg.set_src_external_addr(sockaddr.clone());
                                                     let _ = router.route_packet(msg).await;
                                                 }
                                                 Result::Err(e) => {

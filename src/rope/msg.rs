@@ -3,7 +3,7 @@ use std::ops::Deref;
 use super::rpv6::{BoxedPacket, Header};
 use super::exaddr::ExternalAddr;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct MsgOpts {
     src_external_addr: ExternalAddr,
 }
@@ -46,7 +46,7 @@ impl Msg {
     /// This option help application identify the source address of the physical network.
     /// In most cases it's set by the router, before routing the packet.
     pub fn set_src_external_addr<'a>(&'a mut self, new_addr: ExternalAddr) -> ExternalAddr {
-        let old = self.opts.src_external_addr;
+        let old = self.opts.src_external_addr.clone();
         self.opts.src_external_addr = new_addr;
         old
     }
@@ -54,7 +54,7 @@ impl Msg {
     /// Get `src_external_addr`.
     /// This option help application identify the source address of the physical network.
     pub fn get_src_external_addr(&self) -> ExternalAddr {
-        self.opts.src_external_addr
+        self.opts.src_external_addr.clone()
     }
 
     /// Consume this message and return a new message with new RPv6 header and same option.
