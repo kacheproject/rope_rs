@@ -19,6 +19,7 @@ bytes = "1"
 arrayvec = "0.7"
 average = "0.13"
 itertools = "0.10"
+url = "2.2"
 async-trait = "0.1"
 
 [dev-dependencies]
