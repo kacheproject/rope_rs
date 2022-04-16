@@ -104,7 +104,7 @@ impl Transport for UdpTransport {
     }
 
     fn create_rx(&self) -> Box<dyn Rx> {
-        Box::new(UdpTransportRx::new(self.clone()))
+        Box::new(UdpRx::new(self.clone()))
     }
 }
 
@@ -118,11 +118,11 @@ impl UdpTransport {
 }
 
 #[derive(Debug)]
-pub struct UdpTransportRx {
+pub struct UdpRx {
     transport: UdpTransport
 }
 
-impl UdpTransportRx {
+impl UdpRx {
     pub fn new(transport: UdpTransport) -> Self {
         Self {
             transport,
@@ -131,7 +131,7 @@ impl UdpTransportRx {
 }
 
 #[async_trait]
-impl Rx for UdpTransportRx {
+impl Rx for UdpRx {
     async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, ExternalAddr)> {
         match self.transport.recv_from(buf).await {
             Ok((size, addr)) => {
