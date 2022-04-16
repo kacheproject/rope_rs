@@ -173,6 +173,28 @@ impl AskContent {
             q,
         }
     }
+
+    /// Get the peer id asked for.
+    pub fn get_id(&self) -> u128 {
+        self.id
+    }
+
+    /// Get all questions as integer.
+    pub fn get_questions_int(&self) -> &[u64] {
+        &self.q
+    }
+
+    /// Get all known questions.
+    /// This method will filter out all unknown questions.
+    pub fn get_questions<'a>(&'a self)
+        -> impl std::iter::Iterator<Item = AskQuestion> + 'a {
+        self.get_questions_int().iter().filter_map(|v| {
+            match AskQuestion::try_from(*v) {
+                Ok(r) => Some(r),
+                Err(_) => None
+            }
+        })
+    }
 }
 
 pub enum AnyMessage {
