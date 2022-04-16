@@ -112,7 +112,7 @@ impl Transport for UdpTransport {
     }
 
     fn create_rx(&self) -> Box<dyn Rx> {
-        Box::new(UdpTransportRx::new(self.clone()))
+        Box::new(UdpRx::new(self.clone()))
     }
 }
 
@@ -122,6 +122,11 @@ impl UdpTransport {
             socket: Arc::new(socket),
             status: Arc::new(parking_lot::Mutex::new(UdpTransportStatus::new())),
         }
+    }
+
+    pub async fn bind<A: tokio::net::ToSocketAddrs>(addr: A) -> io::Result<Self> {
+        let socket = UdpSocket::bind(addr).await?;
+        Ok(Self::new(socket))
     }
 }
 
@@ -138,11 +143,11 @@ impl crate::peer_discovery::DefaultTransport for UdpTransport {
 }
 
 #[derive(Debug)]
-pub struct UdpTransportRx {
+pub struct UdpRx {
     transport: UdpTransport
 }
 
-impl UdpTransportRx {
+impl UdpRx {
     pub fn new(transport: UdpTransport) -> Self {
         Self {
             transport,
@@ -151,7 +156,7 @@ impl UdpTransportRx {
 }
 
 #[async_trait]
-impl Rx for UdpTransportRx {
+impl Rx for UdpRx {
     async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, ExternalAddr)> {
         match self.transport.recv_from(buf).await {
             Ok((size, addr)) => {
