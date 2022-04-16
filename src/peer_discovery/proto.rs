@@ -1,31 +1,30 @@
-use bytes::BufMut;
-use url::Url;
 use serde::{Deserialize, Serialize};
-
-struct WriteCounter {
-    pub length: usize,
-}
-
-impl Default for WriteCounter {
-    fn default() -> Self {
-        Self {
-            length: 0,
-        }
-    }
-}
-
-impl std::io::Write for WriteCounter {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.length += buf.len();
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> { Ok(()) } // just ignore
-}
+use crate::common::io::{BufWriter, WriteCounter};
 
 pub trait ProtocolMessage {
     /// Return the message size. Return 0 if there is error in message.
     fn required_size(&self) -> usize;
+}
+
+/// Toolkit trait to apply `ProtocolMessage` and `CopiedProtocolMessage` in messagepack form when the struct meet requirements.
+/// - `ProtocolMessage`: `serde::Serialize`
+/// - `CopiedProtocolMessage`: `serde::Serialize + MessageKind + serde::Deserialize<'a>`
+trait RMPProtocolMessage {}
+
+impl<T: RMPProtocolMessage + Serialize> ProtocolMessage for T {
+    fn required_size(&self) -> usize {
+        let mut counter = WriteCounter::default();
+        if let Ok(_) = rmp_serde::encode::write_named(&mut counter, self) {
+            1 + counter.length
+        } else {
+            0
+        }
+    }
+}
+
+/// A trait for message kind.
+trait MessageKind {
+    const KIND_NUMBER: u8;
 }
 
 #[derive(Debug)]
@@ -37,15 +36,37 @@ pub enum DecodeError<E> {
 #[derive(Debug)]
 pub enum EncodeError<E> {
     Internal(E),
+    InsuffientSize,
 }
 
-pub trait CopiedProtocolMessage : ProtocolMessage + Sized {
+pub trait CopiedProtocolMessage<'a> : ProtocolMessage + Sized {
     type DecodeInternalError;
     type EncodeInternalError;
 
-    fn parse(src: &[u8]) -> Result<Self, DecodeError<Self::DecodeInternalError>>;
+    fn parse(src: &'a [u8]) -> Result<Self, DecodeError<Self::DecodeInternalError>>;
 
-    fn write(&self, dst: &mut Vec<u8>) -> Result<usize, EncodeError<Self::EncodeInternalError>>;
+    fn write(&self, dst: &mut [u8]) -> Result<usize, EncodeError<Self::EncodeInternalError>>;
+}
+
+impl<'a, T: RMPProtocolMessage + MessageKind + Serialize + Deserialize<'a>> CopiedProtocolMessage<'a> for T {
+    type DecodeInternalError = rmp_serde::decode::Error;
+    type EncodeInternalError = rmp_serde::encode::Error;
+
+    fn parse(src: &'a [u8]) -> Result<Self, DecodeError<Self::DecodeInternalError>> {
+        let content: T = rmp_serde::from_slice(&src[1..]).map_err(|e| DecodeError::Internal(e))?;
+        Ok(content)
+    }
+
+    fn write(&self, dst: &mut [u8]) -> Result<usize, EncodeError<Self::EncodeInternalError>> {
+        if dst.len() >= self.required_size() {
+            dst[0] = Self::KIND_NUMBER;
+            let mut dstio = BufWriter::new(dst, 1);
+            rmp_serde::encode::write_named(&mut dstio, self).map_err(|e| EncodeError::Internal(e))?;
+            Ok(dstio.len())
+        } else {
+            Err(EncodeError::InsuffientSize)
+        }
+    }
 }
 
 #[derive(PartialEq, Debug, Serialize, Deserialize)]
@@ -53,40 +74,10 @@ pub struct SyncContent {
     known: Vec<u128>
 }
 
-impl ProtocolMessage for SyncContent {
-    fn required_size(&self) -> usize {
-        let mut counter = WriteCounter::default();
-        if let Ok(_) = rmp_serde::encode::write_named(&mut counter, self) {
-            1 + counter.length
-        } else {
-            0
-        }
-    }
-}
+impl RMPProtocolMessage for SyncContent {}
 
-impl CopiedProtocolMessage for SyncContent {
-    type DecodeInternalError = rmp_serde::decode::Error;
-    type EncodeInternalError = rmp_serde::encode::Error;
-
-    fn parse(src: &[u8]) -> Result<Self, DecodeError<Self::DecodeInternalError>> {
-        let content: SyncContent = rmp_serde::from_slice(&src[1..]).map_err(|e| DecodeError::Internal(e))?;
-        Ok(content)
-    }
-
-    fn write<'a>(&'a self, mut dst: &'a mut Vec<u8>) -> Result<usize, EncodeError<Self::EncodeInternalError>> {
-        dst.put_u8(0);
-        let old_len = dst.len();
-        rmp_serde::encode::write_named(&mut dst, self).map_err(|e| EncodeError::Internal(e))?;
-        Ok(dst.len() - old_len)
-    }
-}
-
-impl TryFrom<&[u8]> for SyncContent {
-    type Error = DecodeError<<Self as CopiedProtocolMessage>::DecodeInternalError>;
-
-    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
-        Self::parse(value)
-    }
+impl MessageKind for SyncContent {
+    const KIND_NUMBER: u8 = 0;
 }
 
 impl SyncContent {
@@ -113,7 +104,11 @@ impl ProtocolMessage for ByeContent {
     }
 }
 
-impl CopiedProtocolMessage for ByeContent {
+impl MessageKind for ByeContent {
+    const KIND_NUMBER: u8 = 1;
+}
+
+impl CopiedProtocolMessage<'_> for ByeContent {
     type DecodeInternalError = rmp_serde::decode::Error;
 
     type EncodeInternalError = rmp_serde::encode::Error;
@@ -122,27 +117,76 @@ impl CopiedProtocolMessage for ByeContent {
         Ok(Self {})
     }
 
-    fn write(&self, dst: &mut Vec<u8>) -> Result<usize, EncodeError<Self::EncodeInternalError>> {
-        dst.put_u8(1);
-        Ok(self.required_size())
+    fn write(&self, dst: &mut [u8]) -> Result<usize, EncodeError<Self::EncodeInternalError>> {
+        if dst.len() >= self.required_size() {
+            dst[0] = 1;
+            Ok(1)
+        } else {
+            Err(EncodeError::InsuffientSize)
+        }
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum AskQuestion {
+    PublicKey,
+    PhysicalWires,
+}
+
+impl From<AskQuestion> for u64 {
+    fn from(value: AskQuestion) -> Self {
+        match value {
+            AskQuestion::PublicKey => 1,
+            AskQuestion::PhysicalWires => 2,
+        }
+    }
+}
+
+impl TryFrom<u64> for AskQuestion {
+    type Error = &'static str;
+
+    fn try_from(value: u64) -> Result<Self, Self::Error> {
+        match value {
+            1 => Ok(AskQuestion::PublicKey),
+            2 => Ok(AskQuestion::PhysicalWires),
+            _ => Err("unknown question")
+        }
+    }
+}
+
+#[derive(PartialEq, Debug, Serialize, Deserialize)]
 pub struct AskContent {
     id: u128,
     q: Vec<u64>,
 }
 
+impl RMPProtocolMessage for AskContent {}
+
+impl MessageKind for AskContent {
+    const KIND_NUMBER: u8 = 2;
+}
+
+impl AskContent {
+    pub fn new(id: u128, q: Vec<u64>) -> Self {
+        Self {
+            id,
+            q,
+        }
+    }
+}
+
 pub enum AnyMessage {
     NDSync(SyncContent),
     NDBye(ByeContent),
+    NDAsk(AskContent),
 }
 
 pub fn parse(src: &[u8]) -> Result<AnyMessage, DecodeError<rmp_serde::decode::Error>> {
     let kind = src[0];
     match kind {
-        0 => Ok(AnyMessage::NDSync(SyncContent::try_from(src)?)),
-        1 => Ok(AnyMessage::NDBye(ByeContent {})),
+        SyncContent::KIND_NUMBER => Ok(AnyMessage::NDSync(SyncContent::parse(src)?)),
+        ByeContent::KIND_NUMBER => Ok(AnyMessage::NDBye(ByeContent {})),
+        AskContent::KIND_NUMBER => Ok(AnyMessage::NDAsk(AskContent::parse(src)?)),
         _ => Err(DecodeError::UndefinedKind)
     }
 }

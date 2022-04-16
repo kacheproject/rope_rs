@@ -36,7 +36,13 @@ impl PeerDiscoveryServ {
         obj
     }
 
-    async fn ask(&self, peer_id: u128) { todo!() }
+    async fn ask(&self, peer_id: u128, q: Vec<proto::AskQuestion>, target_peer: u128) {
+        let msg = proto::AskContent::new(peer_id, q.iter().map(|v| v.clone().into()).collect());
+        let mut src = Vec::new();
+        src.resize(msg.required_size(), 0);
+        msg.write(&mut src).unwrap(); // Here should not error
+        let _ = self.socket.send_to(target_peer, 6, &src, 0).await;
+    }
 }
 
 enum HandlerError {
@@ -137,6 +143,9 @@ async fn socket_handler(pdserv: Arc<PeerDiscoveryServ>) {
                                 break;
                             }
                         },
+                        NDAsk(contet) => {
+                            todo!()
+                        }
                     }
                 }
                 Err(e) => {
