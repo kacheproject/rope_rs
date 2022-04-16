@@ -328,6 +328,14 @@ impl Router {
         router
     }
 
+    pub fn new_random() -> Arc<Self> {
+        use crate::kssid;
+        
+        let id = kssid::gen_long();
+        let seck = Arc::new(X25519SecretKey::new());
+        Self::new(id, seck)
+    }
+
     pub fn find_peer_by_public_key(&self, key: &X25519PublicKey) -> Option<Arc<Peer>> {
         let peers = self.peers.read();
         for peer in peers.iter() {
@@ -499,6 +507,14 @@ impl Router {
                 }
             }
         });
+    }
+
+    pub fn get_public_key(&self) -> Arc<X25519PublicKey> {
+        self.static_public_key.clone()
+    }
+
+    pub fn get_id(&self) -> u128 {
+        self.id
     }
 }
 
