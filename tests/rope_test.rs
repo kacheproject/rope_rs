@@ -1,6 +1,5 @@
 use rope_rs::rope::*;
 use rope_rs::rope::wires::Transport;
-use tokio::net::UdpSocket;
 use simple_logger::SimpleLogger;
 use rope_rs::transports::udp::UdpTransport;
 
@@ -42,8 +41,8 @@ async fn router_remote_hello_test() {
     let sock1 = r1.bind(0, 16).unwrap();
     let peer0 = r1.new_peer(r0.get_id(), r0_pk).unwrap();
     let peer1 = r0.new_peer(r0.get_id(), r1_pk).unwrap();
-    let transport0 = UdpTransport::new(UdpSocket::bind("[::1]:0").await.unwrap());
-    let transport1 = UdpTransport::new(UdpSocket::bind("[::1]:0").await.unwrap());
+    let transport0 = UdpTransport::bind("[::1]:0").await.unwrap();
+    let transport1 = UdpTransport::bind("[::1]:0").await.unwrap();
     r0.attach_rx(transport0.create_rx());
     r1.attach_rx(transport1.create_rx());
     peer1.add_tx(transport0.create_tx(transport1.local_addr().unwrap()));

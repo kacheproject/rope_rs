@@ -115,6 +115,11 @@ impl UdpTransport {
             status: Arc::new(parking_lot::Mutex::new(UdpTransportStatus::new())),
         }
     }
+
+    pub async fn bind<A: tokio::net::ToSocketAddrs>(addr: A) -> io::Result<Self> {
+        let socket = UdpSocket::bind(addr).await?;
+        Ok(Self::new(socket))
+    }
 }
 
 #[derive(Debug)]
