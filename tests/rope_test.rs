@@ -3,15 +3,9 @@ use rope_rs::rope::wires::Transport;
 use simple_logger::SimpleLogger;
 use rope_rs::transports::udp::UdpTransport;
 
-use std::sync::Once;
+mod common;
 
-static INIT: Once = Once::new();
-
-pub fn initialize() {
-    INIT.call_once(|| {
-        SimpleLogger::new().with_level(log::LevelFilter::Trace).init().unwrap();
-    });
-}
+use common::initialize;
 
 #[tokio::test]
 async fn router_local_hello_test() {
