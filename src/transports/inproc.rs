@@ -80,4 +80,8 @@ impl Tx for ChanPairTx {
     fn is_match_addr(&self, addr: ExternalAddr) -> bool {
         false
     }
+
+    fn get_external_address(&self) -> ExternalAddr {
+        ExternalAddr::None
+    }
 }

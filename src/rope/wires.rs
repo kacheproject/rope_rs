@@ -15,6 +15,9 @@ pub trait Tx: Debug + Send + Sync {
 
     /// Return If this tx will send data to `exaddr`.
     fn is_match_addr(&self, exaddr: ExternalAddr) -> bool;
+
+    /// Return the external destination address
+    fn get_external_address(&self) -> ExternalAddr;
 }
 
 #[async_trait]
