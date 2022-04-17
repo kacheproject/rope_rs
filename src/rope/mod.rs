@@ -163,6 +163,10 @@ impl Peer {
         }
         result
     }
+
+    pub fn get_public_key(&self) -> Arc<X25519PublicKey> {
+        self.static_public_key.clone()
+    }
 }
 
 async fn router_routing_rx_thread_body(
