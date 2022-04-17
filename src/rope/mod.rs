@@ -47,7 +47,21 @@ async fn router_routing_rx_thread_body(
                         NewTunnel(pk) => {
                             if let Some(peer) = router.find_peer_by_public_key(&pk) {
                                 { // It's a good chance to add new address into peer
-                                }
+                                    let all_tx = peer.get_all_tx();
+                                    // TODO: avoid operate the internal structure directly, replace with a method
+                                    if all_tx.len() == 0 {
+                                        // It very costs to scan all txs, so we just do it when no tx available.
+                                        std::mem::drop(all_tx); // avoid deadlock
+                                        if let Some(dtransport) = router.get_default_transport(sockaddr.protocol()) {
+                                            match dtransport.create_tx_from_exaddr(&sockaddr) {
+                                                Result::Ok(tx) => {
+                                                    peer.add_tx(tx);
+                                                },
+                                                Result::Err(e) => error!("could not create tx from {:?}: {:?}", sockaddr, e),
+                                            };
+                                        }
+                                    }
+                                };
                                 let ipaddr = sockaddr.clone().into();
                                 let mut src: &[u8] = &data;
                                 loop {
@@ -158,6 +172,7 @@ pub struct Router {
     wg_dispatcher: WireGuardDispatcher<Weak<Peer>>,
     raw_packet_tx: mpsc::Sender<(bytes::Bytes, ExternalAddr)>,
     routing_msg_tx: mpsc::Sender<Msg>,
+    default_transports: RwLock<HashMap<String, Arc<dyn DefaultTransport>>>,
 }
 
 pub enum RoutingResult {
@@ -201,6 +216,7 @@ impl Router {
             ),
             raw_packet_tx: producer,
             routing_msg_tx: routing_producer,
+            default_transports: RwLock::new(HashMap::new()),
         });
         tokio::spawn(router_routing_rx_thread_body(
             Arc::downgrade(&router),
@@ -405,6 +421,19 @@ impl Router {
 
     pub fn get_id(&self) -> u128 {
         self.id
+    }
+
+    /// Set a default transport.
+    /// Default transport helps router handle unknown incoming external address,
+    pub fn set_default_transport(&self, protocol: &str, transport: Arc<dyn DefaultTransport>) {
+        let mut defaults = self.default_transports.write();
+        let _ = defaults.insert(protocol.to_string(), transport);
+    }
+
+    /// Get a default transport.
+    pub fn get_default_transport(&self, protocol: &str) -> Option<Arc<dyn DefaultTransport>> {
+        let defaults = self.default_transports.read();
+        defaults.get(protocol).cloned()
     }
 }
 
