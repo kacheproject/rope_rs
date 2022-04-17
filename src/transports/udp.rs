@@ -63,6 +63,10 @@ impl Tx for UdpTx {
             _ => false
         }
     }
+
+    fn get_external_address(&self) -> ExternalAddr {
+        ExternalAddr::Udp(self.dst_addr)
+    }
 }
 
 #[derive(Debug)]
