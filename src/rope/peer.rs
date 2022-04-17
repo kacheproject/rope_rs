@@ -157,4 +157,8 @@ impl Peer {
     pub fn get_public_key(&self) -> Arc<X25519PublicKey> {
         self.static_public_key.clone()
     }
+
+    pub(crate) fn get_all_tx(&self) -> parking_lot::RwLockReadGuard<'_, Vec<Arc<dyn Tx>>> {
+        self.txs.read()
+    }
 }

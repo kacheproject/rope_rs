@@ -44,3 +44,7 @@ where
     fn create_tx(&self) -> Box<dyn Tx>;
     fn create_rx(&self) -> Box<dyn Rx>;
 }
+
+pub trait DefaultTransport: std::fmt::Debug + Sync + Send {
+    fn create_tx_from_exaddr(&self, addr: &ExternalAddr) -> Result<Box<dyn Tx>, &'static str>;
+}
