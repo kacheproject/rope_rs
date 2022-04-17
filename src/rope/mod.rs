@@ -84,7 +84,12 @@ impl Peer {
         best_tx
     }
 
-    fn select_tx(&self) -> Option<Arc<dyn Tx>> {
+    fn select_tx(&self, prefer_address: Option<&ExternalAddr>) -> Option<Arc<dyn Tx>> {
+        if let Some(addr) = prefer_address {
+            if let Some(tx) = self.find_tx_of_addr(addr.clone()) {
+                return Some(tx)
+            }
+        }
         let current_tx = self.current_tx.lock();
         if let Some(tx_weakref) = current_tx.deref() {
             if let Some(tx) = tx_weakref.upgrade() {
@@ -114,7 +119,7 @@ impl Peer {
             match self.wgtunn.encapsulate(data, dst) {
                 TunnResult::Done => break Ok(tx_bytes),
                 TunnResult::WriteToNetwork(buf) => {
-                    match self.send(buf).await {
+                    match self.send(buf, None).await {
                         Ok(size) => tx_bytes += size,
                         Err(e) => break Err(EncryptedSendError::IOE(e)),
                     }
@@ -129,8 +134,8 @@ impl Peer {
 
     /// Send cleartext though any tx.
     /// Return WouldBlock if no tx avaliable.
-    async fn send(&self, data: &[u8]) -> io::Result<usize> {
-        if let Some(tx) = self.select_tx() {
+    async fn send(&self, data: &[u8], prefer_address: Option<&ExternalAddr>) -> io::Result<usize> {
+        if let Some(tx) = self.select_tx(prefer_address) {
             tx.send_to(data).await
         } else {
             Err(io::ErrorKind::WouldBlock.into())
@@ -188,13 +193,15 @@ async fn router_routing_rx_thread_body(
                     match router.wg_dispatcher.dispatch(&data) {
                         NewTunnel(pk) => {
                             if let Some(peer) = router.find_peer_by_public_key(&pk) {
+                                { // It's a good chance to add new address into peer
+                                }
                                 let ipaddr = sockaddr.clone().into();
                                 let mut src: &[u8] = &data;
                                 loop {
                                     match peer.wgtunn.decapsulate(ipaddr, src, &mut buf) {
                                         TunnResult::Done => break,
                                         TunnResult::WriteToNetwork(data) => {
-                                            if let Some(e) = peer.send(data).await.err() {
+                                            if let Some(e) = peer.send(data, Some(&sockaddr)).await.err() {
                                                 error!("Error while writing to network: {:?}", e);
                                             }
                                         }
@@ -230,7 +237,7 @@ async fn router_routing_rx_thread_body(
                                     match tunn.decapsulate(ipaddr, src, &mut buf) {
                                         TunnResult::Done => break,
                                         TunnResult::WriteToNetwork(data) => {
-                                            if let Some(e) = peer.send(data).await.err() {
+                                            if let Some(e) = peer.send(data, None).await.err() {
                                                 error!("Error while writing to network: {:?}", e);
                                             }
                                         }
@@ -456,9 +463,10 @@ impl Router {
     async fn route_packet_broadcast(&self, packet: Msg) {
         let header = packet.get_header();
         let peers = self.peers.read().clone();
+        trace!("broadcasting {:?} to {} peer(s).", packet, peers.len());
         for peer in peers {
             let mut new_header = header.clone();
-            new_header.dst_addr = peer.id.to_be_bytes();
+            new_header.set_dst_addr(peer.get_id());
             let new_packet = packet.clone().replace_header(new_header);
             let _ = self.route_packet(new_packet);
         }
