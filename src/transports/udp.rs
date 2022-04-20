@@ -108,6 +108,12 @@ impl std::ops::Deref for UdpTransport {
     }
 }
 
+impl std::fmt::Debug for UdpTransport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("UdpTransport {{ socket.local_addr(): {:?}, status: {:?} }}", self.socket.local_addr(), self.status))
+    }
+}
+
 impl Transport for UdpTransport {
     type Addr = SocketAddr;
 
