@@ -87,6 +87,14 @@ impl Header {
     pub fn src_addr_int(&self) -> u128 {
         u128::from_be_bytes(self.src_addr)
     }
+
+    pub fn set_src_addr(&mut self, src_addr: u128) {
+        self.src_addr = src_addr.to_be_bytes();
+    }
+
+    pub fn set_dst_addr(&mut self, dst_addr: u128) {
+        self.dst_addr = dst_addr.to_be_bytes();
+    }
 }
 
 #[derive(Debug)]
