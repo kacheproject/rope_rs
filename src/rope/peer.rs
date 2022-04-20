@@ -98,22 +98,18 @@ impl Peer {
     /// Encrypt src, write to dst, and send.
     /// The size of dst should be src.len() + 32 and should not be less than 148 bytes.
     pub(crate) async fn send_encrypted<'a>(&self, src: &[u8], dst: &'a mut [u8]) -> Result<usize, EncryptedSendError> {
-        let mut data = src;
-        let mut tx_bytes = 0usize;
-        loop {
-            match self.wgtunn.encapsulate(data, dst) {
-                TunnResult::Done => break Ok(tx_bytes),
-                TunnResult::WriteToNetwork(buf) => {
-                    match self.send(buf, None).await {
-                        Ok(size) => tx_bytes += size,
-                        Err(e) => break Err(EncryptedSendError::IOE(e)),
-                    }
-                },
-                TunnResult::WriteToTunnelV4(_, _) => unreachable!(),
-                TunnResult::WriteToTunnelV6(_, _) => unreachable!(),
-                TunnResult::Err(e) => break Err(EncryptedSendError::WireGuard(e)),
-            };
-            data = &[];
+        match self.wgtunn.encapsulate(src, dst) { // encapsulate() won't return TunnResult::Done
+            TunnResult::Done => unreachable!(),
+            TunnResult::WriteToNetwork(buf) => {
+                match self.send(buf, None).await {
+                    Ok(size) => Ok(size),
+                    Err(e) => Err(EncryptedSendError::IOE(e)),
+                }
+                
+            },
+            TunnResult::WriteToTunnelV4(_, _) => unreachable!(),
+            TunnResult::WriteToTunnelV6(_, _) => unreachable!(),
+            TunnResult::Err(e) => Err(EncryptedSendError::WireGuard(e)),
         }
     }
 
