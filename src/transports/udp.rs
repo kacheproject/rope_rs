@@ -94,10 +94,15 @@ impl UdpTransportStatus {
     }
 }
 
-#[derive(Clone, Debug)]
 pub struct UdpTransport {
     socket: Arc<UdpSocket>,
-    status: Arc<parking_lot::Mutex<UdpTransportStatus>>,
+    status: parking_lot::Mutex<UdpTransportStatus>,
+}
+
+impl Clone for UdpTransport {
+    fn clone(&self) -> Self {
+        Self { socket: self.socket.clone(), status: parking_lot::Mutex::new(UdpTransportStatus::new()) }
+    }
 }
 
 impl std::ops::Deref for UdpTransport {
@@ -130,7 +135,7 @@ impl UdpTransport {
     pub fn new(socket: UdpSocket) -> Self {
         Self {
             socket: Arc::new(socket),
-            status: Arc::new(parking_lot::Mutex::new(UdpTransportStatus::new())),
+            status: parking_lot::Mutex::new(UdpTransportStatus::new()),
         }
     }
 
