@@ -30,7 +30,7 @@ impl Tx for UdpTx {
     ) -> io::Result<usize>
     {
         let socket = &self.transport;
-
+        let addr = &self.dst_addr;
         {
             let mut stat = socket.status.lock();
             let timeout = stat.time_last_recv.saturating_sub(stat.time_last_sent) >= 300;
