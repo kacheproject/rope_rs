@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tokio::net::UdpSocket;
 use async_trait::async_trait;
 use std::net::SocketAddr;
-use crate::rope::wires::{Tx, Rx, Transport};
+use crate::rope::wires::{Tx, Rx, Transport, DefaultTransport};
 use crate::utils::netmeter::NetworkMeter;
 use crate::rope::ExternalAddr;
 
@@ -130,6 +130,18 @@ impl UdpTransport {
     pub async fn bind<A: tokio::net::ToSocketAddrs>(addr: A) -> io::Result<Self> {
         let socket = UdpSocket::bind(addr).await?;
         Ok(Self::new(socket))
+    }
+}
+
+
+impl DefaultTransport for UdpTransport {
+    fn create_tx_from_exaddr(&self, addr: &ExternalAddr) -> Result<Box<dyn Tx>, &'static str> {
+        match addr {
+            ExternalAddr::Udp(sockaddr) => {
+                Ok(self.create_tx(sockaddr.clone()))
+            },
+            _ => Err("unexpected protocol")
+        }
     }
 }
 
