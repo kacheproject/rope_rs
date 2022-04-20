@@ -100,3 +100,13 @@ impl FromStr for ExternalAddr {
         }
     }
 }
+
+impl std::fmt::Display for ExternalAddr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::None => f.write_str("none:"),
+            Self::Udp(sockaddr) => f.write_fmt(format_args!("udp://{}", sockaddr)),
+            Self::Other(uri) => f.write_fmt(format_args!("{}", uri)),
+        }
+    }
+}
