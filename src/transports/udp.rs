@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tokio::net::UdpSocket;
 use async_trait::async_trait;
 use std::net::SocketAddr;
-use crate::rope::wires::{Tx, Rx, Transport};
+use crate::rope::wires::{Tx, Rx, Transport, DefaultTransport};
 use crate::utils::netmeter::NetworkMeter;
 use crate::rope::ExternalAddr;
 
@@ -134,12 +134,12 @@ impl UdpTransport {
     }
 }
 
-#[cfg(feature = "peer_discovery")]
-impl crate::peer_discovery::DefaultTransport for UdpTransport {
-    fn create_tx_from_exaddr(&self, addr: ExternalAddr) -> Result<Box<dyn Tx>, &'static str> {
+
+impl DefaultTransport for UdpTransport {
+    fn create_tx_from_exaddr(&self, addr: &ExternalAddr) -> Result<Box<dyn Tx>, &'static str> {
         match addr {
             ExternalAddr::Udp(sockaddr) => {
-                Ok(self.create_tx(sockaddr))
+                Ok(self.create_tx(sockaddr.clone()))
             },
             _ => Err("unexpected protocol")
         }
