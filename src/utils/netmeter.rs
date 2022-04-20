@@ -25,10 +25,18 @@ enum StatusChange {
     Unavaliable(i64),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct NetworkMeter {
     bandwidth_samples: [BandwidthSample; 5],
     status_samples: ArrayVec<StatusChange, 64>,
+}
+
+impl std::fmt::Debug for NetworkMeter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (bw_rx, bw_tx) = self.get_bandwidth();
+        let availablity = self.get_availability();
+        f.write_fmt(format_args!("NetworkMeter {{ bandwidth_rx: {}, bandwidth_tx: {}, availability: {} }}", bw_rx, bw_tx, availablity))
+    }
 }
 
 impl NetworkMeter {
