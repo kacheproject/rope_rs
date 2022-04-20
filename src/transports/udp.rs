@@ -33,15 +33,18 @@ impl Tx for UdpTx {
         let addr = &self.dst_addr;
         {
             let mut stat = socket.status.lock();
-            let timeout = stat.time_last_recv.saturating_sub(stat.time_last_sent) >= 300;
+            let timeout = stat.time_last_sent.saturating_sub(stat.time_last_recv);
             // TODO: use beter algorithm to estimate is this tx alive since
             // we allow different tx and rx for single transmission.
             let time = chrono::Utc::now().timestamp();
             stat.time_last_sent = time;
             let meter = &mut stat.meter;
             meter.note_tx(time, buf.len());
-            if timeout {
-                meter.note_unavaliable(time);
+            match timeout {
+                300.. => {
+                    meter.note_unavaliable(time);
+                },
+                _ => {},
             }
         }
         socket.send_to(buf, addr).await
@@ -87,15 +90,10 @@ impl UdpTransportStatus {
     }
 }
 
+#[derive(Clone)]
 pub struct UdpTransport {
     socket: Arc<UdpSocket>,
-    status: parking_lot::Mutex<UdpTransportStatus>,
-}
-
-impl Clone for UdpTransport {
-    fn clone(&self) -> Self {
-        Self { socket: self.socket.clone(), status: parking_lot::Mutex::new(UdpTransportStatus::new()) }
-    }
+    status: Arc<parking_lot::Mutex<UdpTransportStatus>>,
 }
 
 impl std::ops::Deref for UdpTransport {
@@ -128,13 +126,20 @@ impl UdpTransport {
     pub fn new(socket: UdpSocket) -> Self {
         Self {
             socket: Arc::new(socket),
-            status: parking_lot::Mutex::new(UdpTransportStatus::new()),
+            status: Arc::new(parking_lot::Mutex::new(UdpTransportStatus::new())),
         }
     }
 
     pub async fn bind<A: tokio::net::ToSocketAddrs>(addr: A) -> io::Result<Self> {
         let socket = UdpSocket::bind(addr).await?;
         Ok(Self::new(socket))
+    }
+
+    fn with_fresh_status(&self) -> Self {
+        Self {
+            socket: self.socket.clone(),
+            status: Arc::new(parking_lot::Mutex::new(UdpTransportStatus::new())),
+        }
     }
 }
 
@@ -143,7 +148,7 @@ impl DefaultTransport for UdpTransport {
     fn create_tx_from_exaddr(&self, addr: &ExternalAddr) -> Result<Box<dyn Tx>, &'static str> {
         match addr {
             ExternalAddr::Udp(sockaddr) => {
-                Ok(self.create_tx(sockaddr.clone()))
+                Ok(self.with_fresh_status().create_tx(sockaddr.clone()))
             },
             _ => Err("unexpected protocol")
         }
