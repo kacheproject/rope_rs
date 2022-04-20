@@ -96,6 +96,7 @@ impl SyncContent {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
 pub struct ByeContent;
 
 impl ProtocolMessage for ByeContent {
@@ -197,10 +198,51 @@ impl AskContent {
     }
 }
 
+#[derive(PartialEq, Debug, Serialize, Deserialize)]
+pub struct SetContent {
+    id: u128,
+    q: u64,
+    ans: String,
+}
+
+impl RMPProtocolMessage for SetContent {}
+
+impl MessageKind for SetContent {
+    const KIND_NUMBER: u8 = 3;
+}
+
+impl SetContent {
+    pub fn new(id: u128, q: AskQuestion, ans: String) -> Self {
+        Self {
+            id,
+            ans,
+            q: q.into(),
+        }
+    }
+
+    pub fn get_id(&self) -> u128 {
+        self.id
+    }
+
+    pub fn get_q_int(&self) -> u64 {
+        self.q
+    }
+
+    pub fn get_q(&self) -> Option<AskQuestion> {
+        AskQuestion::try_from(self.get_q_int()).map_or_else(|_| None, |v| Some(v))
+    }
+
+    pub fn get_ans(&self) -> &str {
+        &self.ans
+    }
+}
+
+#[derive(Debug)]
 pub enum AnyMessage {
     NDSync(SyncContent),
     NDBye(ByeContent),
     NDAsk(AskContent),
+    NDSet(SetContent),
 }
 
 pub fn parse(src: &[u8]) -> Result<AnyMessage, DecodeError<rmp_serde::decode::Error>> {
@@ -209,6 +251,7 @@ pub fn parse(src: &[u8]) -> Result<AnyMessage, DecodeError<rmp_serde::decode::Er
         SyncContent::KIND_NUMBER => Ok(AnyMessage::NDSync(SyncContent::parse(src)?)),
         ByeContent::KIND_NUMBER => Ok(AnyMessage::NDBye(ByeContent {})),
         AskContent::KIND_NUMBER => Ok(AnyMessage::NDAsk(AskContent::parse(src)?)),
+        SetContent::KIND_NUMBER => Ok(AnyMessage::NDSet(SetContent::parse(src)?)),
         _ => Err(DecodeError::UndefinedKind)
     }
 }
