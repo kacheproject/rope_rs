@@ -49,7 +49,9 @@ impl Peer {
     /// This function will hold read-write lock on .txs.
     pub fn gc_tx(&self) {
         let mut txs = self.txs.write();
+        let old_len = txs.len();
         txs.retain(|v| !v.is_removable());
+        debug!("Peer {} tx garbage collected: from {} to {}.", self.get_id(), old_len, txs.len());
     }
 
     /// Scan all txs and choose one with largest availability.
@@ -65,7 +67,7 @@ impl Peer {
             Some(tx) => Some(Arc::downgrade(&tx)),
             None => None,
         };
-        debug!("Choose {:?} for peer {}", best_tx, self.id);
+        debug!("choose {:?} for peer {}, {} tx available.", best_tx, self.id, txs.len());
         best_tx
     }
 
@@ -123,9 +125,12 @@ impl Peer {
         }
     }
 
+    /// Add a tx to peer.
     pub fn add_tx(&self, tx: Box<dyn Tx>) {
         let mut txs = self.txs.write();
-        txs.push(Arc::from(tx));
+        let txref: Arc<dyn Tx> = Arc::from(tx);
+        txs.push(txref.clone());
+        trace!("Peer {} add tx: {:?}", self.get_id(), txref);
     }
 
     pub fn clear_tx(&self) {

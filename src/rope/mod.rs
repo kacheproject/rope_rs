@@ -39,6 +39,7 @@ async fn router_routing_rx_thread_body(
     loop {
         match consumer.recv().await {
             Some((data, sockaddr)) => {
+                trace!("receive external data from {:?}", sockaddr);
                 if let Some(router) = router_ref.upgrade() {
                     let bufsize = std::cmp::max(148, data.len());
                     let mut buf = bytes::BytesMut::new();
@@ -55,6 +56,7 @@ async fn router_routing_rx_thread_body(
                                         if let Some(dtransport) = router.get_default_transport(sockaddr.protocol()) {
                                             match dtransport.create_tx_from_exaddr(&sockaddr) {
                                                 Result::Ok(tx) => {
+                                                    info!("single-way path discover: {} for {}", sockaddr, peer.get_id());
                                                     peer.add_tx(tx);
                                                 },
                                                 Result::Err(e) => error!("could not create tx from {:?}: {:?}", sockaddr, e),
@@ -133,7 +135,7 @@ async fn router_routing_rx_thread_body(
                         }
                         Err(e) => {
                             error!("Dispatch Error: {:?}", e);
-                            trace!("Raw packet data: {:?}", &data as &[u8]);
+                            trace!("Raw packet data ({} byte(s)): {:?}", &data.len(), &data as &[u8]);
                         }
                     }
                 } else {
