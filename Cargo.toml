@@ -23,13 +23,14 @@ url = {version = "2.2", features = ["serde"]}
 rmp-serde = {version = "1.0", optional = true}
 serde = { version = "1.0", features = ["derive"], optional = true}
 async-trait = "0.1"
+base64 = { version = "0.13", optional = true }
 
 [dev-dependencies]
 simple_logger = { version = "2.1", features = ["stderr"] }
 
 [features]
 default = ["transports_udp", "transports_inproc", "peer_discovery"]
-peer_discovery = ["rmp-serde", "serde"]
+peer_discovery = ["rmp-serde", "serde", "base64"]
 transports = []
 transports_udp = ["transports"]
 transports_inproc = ["transports"]
