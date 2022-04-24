@@ -68,6 +68,7 @@ impl From<ExternalAddr> for Option<Url> {
     }
 }
 
+#[derive(Debug)]
 pub enum ParseError {
     UrlParseError(url::ParseError),
     HostInvalid,
