@@ -1,12 +1,13 @@
 use crate::peer_discovery::proto::SetContent;
-use crate::rope::{rpv6, Router, Socket, ExternalAddr};
+use crate::rope::{rpv6, ExternalAddr, Router, Socket};
 use boringtun::crypto::X25519PublicKey;
 use log::*;
 use std::io;
 
+use std::str::FromStr;
 use std::sync::{Arc, Weak};
 
-use self::proto::{CopiedProtocolMessage, ProtocolMessage, SyncContent, AskContent, AskQuestion};
+use self::proto::{AskContent, AskQuestion, CopiedProtocolMessage, ProtocolMessage, SyncContent};
 
 mod proto;
 
@@ -34,7 +35,10 @@ impl PeerDiscoveryServ {
 
     /// Send a ND_ASK message to ask the detail of one peer. If you need to broadcast the message, use the broadcast ID(`0`) as `ask_peer`.
     async fn ask(&self, ask_for_peer_id: u128, questions: &[AskQuestion], ask_peer: u128) {
-        let msg = proto::AskContent::new(ask_for_peer_id, questions.iter().map(|v| v.clone().into()).collect());
+        let msg = proto::AskContent::new(
+            ask_for_peer_id,
+            questions.iter().map(|v| v.clone().into()).collect(),
+        );
         let mut src = Vec::new();
         src.resize(msg.required_size(), 0);
         msg.write(&mut src).unwrap(); // Here should not error
@@ -44,22 +48,44 @@ impl PeerDiscoveryServ {
     async fn reply_ask(&self, reply_to: u128, ask_for: u128, q: AskQuestion) {
         if let Some(router) = self.get_router() {
             if let Some(peer) = router.find_peer_by_id(ask_for) {
-                let msg = match q {
+                match q {
                     AskQuestion::PublicKey => {
                         use base64::encode_config;
                         let pk = peer.get_public_key();
                         let pk_bytes = pk.as_bytes();
                         let pk_base64 = encode_config(pk_bytes, base64::URL_SAFE_NO_PAD);
-                        SetContent::new(ask_for, q, pk_base64)
-                    },
+                        let msg = SetContent::new(ask_for, q, pk_base64);
+                        let mut buf = Vec::new();
+                        buf.resize(msg.required_size(), 0);
+                        msg.write(&mut buf).unwrap(); // Should not error here
+                        let _ = self.socket.send_to(reply_to, Self::DEFAULT_PORT, &buf, 0).await;
+                    }
                     AskQuestion::PhysicalWires => {
-                        todo!()
+                        if let Some(peer) = router.find_peer_by_id(ask_for) {
+                            let addrs: Vec<ExternalAddr> = {
+                                let all_txs = peer.get_all_tx();
+                                all_txs
+                                    .iter()
+                                    .filter_map(|v| {
+                                        let exaddr = v.get_external_address();
+                                        if exaddr != ExternalAddr::None {
+                                            Some(exaddr)
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .collect()
+                            };
+                            for addr in addrs {
+                                let msg = SetContent::new(ask_for, q, addr.to_string());
+                                let mut buf = Vec::new();
+                                buf.resize(msg.required_size(), 0);
+                                msg.write(&mut buf).unwrap();
+                                let _ = self.socket.send_to(reply_to, Self::DEFAULT_PORT, &buf, 0).await;
+                            }
+                        }
                     }
                 };
-                let mut buf = Vec::new();
-                buf.resize(msg.required_size(), 0);
-                msg.write(&mut buf).unwrap(); // Should not error here
-                let _ = self.socket.send_to(reply_to, Self::DEFAULT_PORT, &buf, 0);
             }
         }
     }
@@ -72,7 +98,10 @@ impl PeerDiscoveryServ {
                 use rand::seq::IteratorRandom;
                 let peers = router.get_peers();
                 let mut rng = rand::thread_rng();
-                peers.iter().map(|p| p.get_id()).choose_multiple(&mut rng, 63)
+                peers
+                    .iter()
+                    .map(|p| p.get_id())
+                    .choose_multiple(&mut rng, 63)
             };
             all_ids.push(router.get_id());
             let msg = SyncContent::new(all_ids);
@@ -90,9 +119,14 @@ enum HandlerError {
     Other,
 }
 
-async fn handle_nd_sync(pdserv: Arc<PeerDiscoveryServ>, content: SyncContent, src_addr: u128, exaddr: ExternalAddr) -> Result<(), HandlerError> {
+async fn handle_nd_sync(
+    pdserv: Arc<PeerDiscoveryServ>,
+    content: SyncContent,
+    src_addr: u128,
+    exaddr: ExternalAddr,
+) -> Result<(), HandlerError> {
     use rand::seq::IteratorRandom;
-    use tokio::time::{Duration, sleep};
+    use tokio::time::{sleep, Duration};
     let remote_knowns = content.get_known();
     {
         let local_knowns: Vec<u128> = {
@@ -102,7 +136,13 @@ async fn handle_nd_sync(pdserv: Arc<PeerDiscoveryServ>, content: SyncContent, sr
         };
         let local_unknowns = remote_knowns.iter().filter(|id| !local_knowns.contains(id));
         for unknown_id in local_unknowns {
-            pdserv.ask(*unknown_id, &[AskQuestion::PublicKey, AskQuestion::PhysicalWires], src_addr).await;
+            pdserv
+                .ask(
+                    *unknown_id,
+                    &[AskQuestion::PublicKey, AskQuestion::PhysicalWires],
+                    src_addr,
+                )
+                .await;
         }
     }
     sleep(Duration::from_secs((rand::random::<u8>() / 10).into())).await; // sleep 0 - 12 seconds
@@ -112,10 +152,10 @@ async fn handle_nd_sync(pdserv: Arc<PeerDiscoveryServ>, content: SyncContent, sr
             let local_knowns = peers.iter().map(|p| p.get_id());
             let mut rng = rand::thread_rng();
             local_knowns
-            .filter(|id| remote_knowns.contains(id))
-            .choose_multiple(&mut rng, 64) // limit to 64 entries
+                .filter(|id| remote_knowns.contains(id))
+                .choose_multiple(&mut rng, 64) // limit to 64 entries
         };
-        add_external_addr_as_tx(&pdserv, &router, src_addr, exaddr);
+        add_external_addr_as_tx(&router, src_addr, exaddr);
         let msg = SyncContent::new(delta);
         let mut buf = Vec::new();
         buf.reserve(msg.required_size() + 40);
@@ -162,13 +202,16 @@ fn handle_nd_bye(pdserv: Arc<PeerDiscoveryServ>, src_peer_id: u128) -> Result<()
     }
 }
 
-fn add_external_addr_as_tx(pdserv: &PeerDiscoveryServ, router: &Router, src_addr: u128, exaddr: ExternalAddr) {
+fn add_external_addr_as_tx(router: &Router, src_addr: u128, exaddr: ExternalAddr) {
     if let Some(peer) = router.find_peer_by_id(src_addr) {
         if let None = peer.find_tx_of_addr(exaddr.clone()) {
             if let Some(default_transport) = router.get_default_transport(exaddr.protocol()) {
                 match default_transport.create_tx_from_exaddr(&exaddr) {
                     Ok(tx) => peer.add_tx(tx),
-                    Err(e) => error!("default transport {:?} could not create tx from external addr {:?}: {:?}", default_transport, exaddr, e),
+                    Err(e) => error!(
+                        "default transport {:?} could not create tx from external addr {:?}: {:?}",
+                        default_transport, exaddr, e
+                    ),
                 }
             }
         }
@@ -177,7 +220,10 @@ fn add_external_addr_as_tx(pdserv: &PeerDiscoveryServ, router: &Router, src_addr
 
 async fn handle_nd_ask(
     pdserv: Arc<PeerDiscoveryServ>,
-    ask_content: AskContent, msg_dst_addr: u128, msg_src_addr: u128) -> Result<(), HandlerError> {
+    ask_content: AskContent,
+    msg_dst_addr: u128,
+    msg_src_addr: u128,
+) -> Result<(), HandlerError> {
     let router = pdserv.get_router().ok_or(HandlerError::RouterDropped)?;
     if msg_dst_addr != 0 && (msg_dst_addr == 0 && ask_content.get_id() == router.get_id()) {
         let target_id = ask_content.get_id();
@@ -192,48 +238,60 @@ async fn handle_nd_ask(
 
 fn handle_nd_set(
     pdserv: Arc<PeerDiscoveryServ>,
-    set_content: SetContent) -> Result<(), HandlerError> {
-        let router = pdserv.get_router().ok_or(HandlerError::RouterDropped)?;
-        if let Some(q) = set_content.get_q() {
-            match q {
-                AskQuestion::PublicKey => {
-                    use base64::decode_config_slice;
-                    let mut pk_bytes = [0u8; 32];
-                    match decode_config_slice(
-                        set_content.get_ans(),
-                        base64::URL_SAFE_NO_PAD, &mut pk_bytes) {
-                            Ok(size) => {
-                                if size == 32 {
-                                    let pk = X25519PublicKey::from(&pk_bytes[..]);
-                                    match router.new_peer(set_content.get_id(), Arc::new(pk)) {
-                                        Ok(_) => {}
-                                        Err(e) => {
-                                            warn!("NDSet processed, but making peer is error: {:?}", e);
-                                        }
-                                    };
-                                } else {
-                                    warn!("NDSet invalid public key for {}: insuffient length {}", set_content.get_id(), size);
+    set_content: SetContent,
+) -> Result<(), HandlerError> {
+    let router = pdserv.get_router().ok_or(HandlerError::RouterDropped)?;
+    if let Some(q) = set_content.get_q() {
+        match q {
+            AskQuestion::PublicKey => {
+                use base64::decode_config_slice;
+                let mut pk_bytes = [0u8; 32];
+                match decode_config_slice(
+                    set_content.get_ans(),
+                    base64::URL_SAFE_NO_PAD,
+                    &mut pk_bytes,
+                ) {
+                    Ok(size) => {
+                        if size == 32 {
+                            let pk = X25519PublicKey::from(&pk_bytes[..]);
+                            match router.new_peer(set_content.get_id(), Arc::new(pk)) {
+                                Ok(_) => {}
+                                Err(e) => {
+                                    warn!("NDSet processed, but making peer is error: {:?}", e);
                                 }
-                            },
-                            Err(e) => {
-                                warn!(
+                            };
+                        } else {
+                            warn!(
+                                "NDSet invalid public key for {}: insuffient length {}",
+                                set_content.get_id(),
+                                size
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
                                     "while processing NDSet public key for {}, could not decode public key: {}",
                                     set_content.get_id(),
                                     e,
                                 );
-                            }
-                    };
-                },
-                AskQuestion::PhysicalWires => {
-                    todo!()
-                },
+                    }
+                };
             }
-            Ok(())
-        } else {
-            warn!("unknown NDSet question: {}", set_content.get_q_int());
-            Ok(())
+            AskQuestion::PhysicalWires => match ExternalAddr::from_str(set_content.get_ans()) {
+                Ok(exaddr) => {
+                    add_external_addr_as_tx(&router, set_content.get_id(), exaddr);
+                }
+                Err(e) => {
+                    error!("could not handle NDSet message: {:?}", e);
+                }
+            },
         }
+        Ok(())
+    } else {
+        warn!("unknown NDSet question: {}", set_content.get_q_int());
+        Ok(())
     }
+}
 
 async fn socket_handler(pdserv: Arc<PeerDiscoveryServ>) {
     loop {
@@ -244,27 +302,38 @@ async fn socket_handler(pdserv: Arc<PeerDiscoveryServ>) {
                     trace!("receive message {:?}", message);
                     match message {
                         NDSync(content) => {
-                            if let Err(HandlerError::RouterDropped) = handle_nd_sync(pdserv.clone(), content, msg.get_header().src_addr_int(), msg.get_src_external_addr()).await {
+                            if let Err(HandlerError::RouterDropped) = handle_nd_sync(
+                                pdserv.clone(),
+                                content,
+                                msg.get_header().src_addr_int(),
+                                msg.get_src_external_addr(),
+                            )
+                            .await
+                            {
                                 break;
                             }
-                        },
+                        }
                         NDBye(_) => {
                             let peer_id = msg.get_header().src_addr_int();
-                            if let Err(HandlerError::RouterDropped) = handle_nd_bye(pdserv.clone(), peer_id) {
+                            if let Err(HandlerError::RouterDropped) =
+                                handle_nd_bye(pdserv.clone(), peer_id)
+                            {
                                 break;
                             }
-                        },
+                        }
                         NDAsk(content) => {
                             let dst_addr = msg.get_header().src_addr_int();
                             let src_addr = msg.get_header().src_addr_int();
-                            if let Err(HandlerError::RouterDropped) = handle_nd_ask(
-                                pdserv.clone(), content,
-                                dst_addr, src_addr).await {
+                            if let Err(HandlerError::RouterDropped) =
+                                handle_nd_ask(pdserv.clone(), content, dst_addr, src_addr).await
+                            {
                                 break;
                             }
-                        },
+                        }
                         NDSet(content) => {
-                            if let Err(HandlerError::RouterDropped) = handle_nd_set(pdserv.clone(), content) {
+                            if let Err(HandlerError::RouterDropped) =
+                                handle_nd_set(pdserv.clone(), content)
+                            {
                                 break;
                             }
                         }
