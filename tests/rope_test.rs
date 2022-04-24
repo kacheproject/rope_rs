@@ -1,3 +1,6 @@
+use std::sync::Arc;
+
+use boringtun::crypto::X25519SecretKey;
 use rope_rs::rope::*;
 use rope_rs::rope::wires::Transport;
 use rope_rs::transports::udp::UdpTransport;
@@ -45,4 +48,16 @@ async fn router_remote_hello_test() {
     });
     let packet = sock0.recv_packet().await.unwrap();
     assert_eq!(packet.get_payload(), "Hello World!".as_bytes());
+}
+
+#[tokio::test]
+async fn router_new_peer_event_test() {
+    initialize();
+    let r0 = Router::new_random();
+    let mut recevier = r0.subscribe_new_peer_events();
+    let p0_sk = X25519SecretKey::new();
+    let p0_pk = Arc::new(p0_sk.public_key());
+    let p0 = r0.new_peer(1, p0_pk.clone()).unwrap();
+    let event = recevier.recv().await.unwrap();
+    assert_eq!(event.peer.get_id(), p0.get_id());
 }

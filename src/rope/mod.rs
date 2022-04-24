@@ -7,7 +7,7 @@ use rpv6::{BoxedPacket, Packet};
 use std::collections::HashMap;
 use std::io;
 use std::sync::{Arc, Weak};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, broadcast};
 
 pub mod rpv6;
 mod utils;
@@ -26,6 +26,8 @@ use peer::*;
 pub type Peer = peer::Peer;
 
 pub type Msg = msg::Msg;
+
+pub mod events;
 
 async fn router_routing_rx_thread_body(
     router_ref: Weak<Router>,
@@ -165,6 +167,18 @@ async fn router_routing_thread(router_ref: Weak<Router>, mut consumer: mpsc::Rec
     }
 }
 
+struct RouterEvents {
+    new_peer_sender: broadcast::Sender<events::NewPeerEvent>,
+}
+
+impl RouterEvents {
+    fn new(backlog: usize) -> Self {
+        Self {
+            new_peer_sender: broadcast::channel(backlog).0,
+        }
+    }
+}
+
 pub struct Router {
     id: u128,
     static_private_key: Arc<X25519SecretKey>,
@@ -175,6 +189,7 @@ pub struct Router {
     raw_packet_tx: mpsc::Sender<(bytes::Bytes, ExternalAddr)>,
     routing_msg_tx: mpsc::Sender<Msg>,
     default_transports: RwLock<HashMap<String, Arc<dyn DefaultTransport>>>,
+    router_events: RouterEvents,
 }
 
 pub enum RoutingResult {
@@ -206,6 +221,7 @@ impl Router {
         let static_public_key = Arc::new(static_private_key.clone().public_key());
         let (producer, consumer) = mpsc::channel(128);
         let (routing_producer, routing_consumer) = mpsc::channel(128);
+        let router_events = RouterEvents::new( 8); // TODO: allow the user to customize this backlog
         let router = Arc::new(Self {
             id,
             static_private_key: static_private_key.clone(),
@@ -219,6 +235,7 @@ impl Router {
             raw_packet_tx: producer,
             routing_msg_tx: routing_producer,
             default_transports: RwLock::new(HashMap::new()),
+            router_events,
         });
         tokio::spawn(router_routing_rx_thread_body(
             Arc::downgrade(&router),
@@ -266,7 +283,11 @@ impl Router {
             let peer = Peer::new_arc(id, static_public_key.clone(), tunn.clone());
             self.wg_dispatcher.set_tunnel(tunidx, tunn, Arc::downgrade(&peer));
             let mut peers = self.peers.write();
-            peers.push(peer.clone());
+            peers.push(peer.clone()); 
+            let event = events::NewPeerEvent {
+                peer: peer.clone(),
+            };
+            let _ = self.router_events.new_peer_sender.send(event);
             Ok(peer)
         } else {
             Err(NewPeerError::BroadcastId)
@@ -436,6 +457,10 @@ impl Router {
     pub fn get_default_transport(&self, protocol: &str) -> Option<Arc<dyn DefaultTransport>> {
         let defaults = self.default_transports.read();
         defaults.get(protocol).cloned()
+    }
+
+    pub fn subscribe_new_peer_events(&self) -> broadcast::Receiver<events::NewPeerEvent> {
+        self.router_events.new_peer_sender.subscribe()
     }
 }
 
