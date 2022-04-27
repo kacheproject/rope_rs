@@ -36,6 +36,11 @@ impl NoDupSenderIdCounter {
     pub fn next(&mut self) -> Option<u32> {
         let mut next_id = self.next_id;
         loop {
+            next_id = if next_id < (1<<24) {
+                next_id + 1
+            } else {
+                0
+            };
             if !self.check_and_set(self.next_id) {
                 let current_id = self.next_id;
                 self.next_id = next_id;
@@ -44,11 +49,6 @@ impl NoDupSenderIdCounter {
                 // That means there is no slot for new id
                 break None;
             };
-            next_id = if next_id < (1<<24) {
-                next_id + 1
-            } else {
-                0
-            }
         }
     }
 }
