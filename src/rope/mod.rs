@@ -299,7 +299,9 @@ impl Router {
     }
 
     /// Get a socket at port_number. Try to use an available port if port_number is zero.
+    /// If there is already a socket available, the available socket will be return and `rx_backlog` will be ignored.
     /// Note: port_number <= 1023 is reserved for rope internal services.
+    /// Though this function won't check this condition, please don't use them in your application.
     /// ## Errors
     /// - `AddrInUse`: no available ports
     pub fn bind(&self, port_number: u16, rx_backlog: usize) -> io::Result<Arc<Socket>> {
@@ -310,6 +312,11 @@ impl Router {
                 None => return Err(io::Error::from(io::ErrorKind::AddrInUse)),
             }
         } else {
+            if let Some((socket_ref, _)) = opened_sockets.get(&port_number) {
+                if let Some(socket) = socket_ref.upgrade() {
+                    return Ok(socket)
+                }
+            }
             port_number
         };
         let (socket, prod) = Socket::new(
