@@ -340,11 +340,18 @@ impl Router {
         let header = packet.get_header();
         let peers = self.peers.read().clone();
         trace!("broadcasting {:?} to {} peer(s).", packet, peers.len());
-        for peer in peers {
-            let mut new_header = header.clone();
-            new_header.set_dst_addr(peer.get_id());
-            let new_packet = packet.clone().replace_header(new_header);
-            let _ = self.route_packet(new_packet);
+        match self.bind(header.src_port, peers.len()) {
+            Ok(socket) => {
+                for peer in peers {
+                    let mut new_header = header.clone();
+                    new_header.set_dst_addr(peer.get_id());
+                    let new_packet = packet.clone().replace_header(new_header);
+                    let _ = socket.send_msg(new_packet).await;
+                }
+            },
+            Err(e) => {
+                error!("could not bind port {} for broadcasting: {:?}, packet dropped.", header.src_port, e);
+            }
         }
     }
 
