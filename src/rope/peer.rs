@@ -101,13 +101,14 @@ impl Peer {
     /// The size of dst should be src.len() + 32 and should not be less than 148 bytes.
     pub(crate) async fn send_encrypted<'a>(&self, src: &[u8], dst: &'a mut [u8]) -> Result<usize, EncryptedSendError> {
         match self.wgtunn.encapsulate(src, dst) { // encapsulate() won't return TunnResult::Done
-            TunnResult::Done => unreachable!(),
+            TunnResult::Done => {
+                Ok(0)
+            }, // ignored: the session is still in handshake state
             TunnResult::WriteToNetwork(buf) => {
                 match self.send(buf, None).await {
                     Ok(size) => Ok(size),
                     Err(e) => Err(EncryptedSendError::IOE(e)),
                 }
-                
             },
             TunnResult::WriteToTunnelV4(_, _) => unreachable!(),
             TunnResult::WriteToTunnelV6(_, _) => unreachable!(),
