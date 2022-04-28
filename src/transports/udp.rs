@@ -93,7 +93,7 @@ impl UdpTransportStatus {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct UdpTransport {
     socket: Arc<UdpSocket>,
     status: Arc<parking_lot::Mutex<UdpTransportStatus>>,
@@ -104,6 +104,12 @@ impl std::ops::Deref for UdpTransport {
 
     fn deref(&self) -> &Self::Target {
         &self.socket
+    }
+}
+
+impl std::fmt::Debug for UdpTransport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("UdpTransport {{ socket.local_addr(): {:?}, status: {:?} }}", self.socket.local_addr(), self.status))
     }
 }
 
