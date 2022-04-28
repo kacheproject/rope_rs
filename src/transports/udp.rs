@@ -33,9 +33,11 @@ impl Tx for UdpTx {
         let addr = &self.dst_addr;
         {
             let mut stat = socket.status.lock();
+            let timeout = stat.time_last_recv.saturating_sub(stat.time_last_sent) >= 300;
+            // TODO: use beter algorithm to estimate is this tx alive since
+            // we allow different tx and rx for single transmission.
             let time = chrono::Utc::now().timestamp();
             stat.time_last_sent = time;
-            let timeout = stat.is_timeout(2);
             let meter = &mut stat.meter;
             meter.note_tx(time, buf.len());
             if timeout {
@@ -51,10 +53,8 @@ impl Tx for UdpTx {
 
     fn is_removable(&self) -> bool {
         let transport = &self.transport;
-        let status = transport.status.lock();
-        let is_receiving = chrono::Utc::now().timestamp().saturating_sub(status.time_last_recv) > 300; // 5 mins
-        let is_timeout = status.is_timeout(300);
-        is_receiving && is_timeout
+        let stat = transport.status.lock();
+        stat.time_last_recv.saturating_sub(stat.time_last_sent) >= 300
     }
 
     fn is_match_addr(&self, exaddr: ExternalAddr) -> bool {
@@ -77,13 +77,6 @@ struct UdpTransportStatus {
 }
 
 impl UdpTransportStatus {
-    pub fn is_timeout(&self, timeout: i64) -> bool {
-        self.time_last_recv
-            .saturating_sub(self.time_last_sent)
-            .abs()
-            >= timeout
-    }
-
     pub fn new() -> Self {
         UdpTransportStatus {
             meter: NetworkMeter::new(),
