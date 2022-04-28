@@ -18,7 +18,6 @@ pub mod wires;
 use wires::*;
 
 use self::wgdispatcher::NewTunnelError;
-pub mod netmeter;
 pub mod exaddr;
 pub type ExternalAddr = exaddr::ExternalAddr;
 mod msg;

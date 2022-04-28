@@ -4,7 +4,7 @@ use tokio::net::UdpSocket;
 use async_trait::async_trait;
 use std::net::SocketAddr;
 use crate::rope::wires::{Tx, Rx, Transport};
-use crate::rope::netmeter::NetworkMeter;
+use crate::utils::netmeter::NetworkMeter;
 use crate::rope::ExternalAddr;
 
 #[derive(Debug)]
