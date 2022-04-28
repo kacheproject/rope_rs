@@ -95,6 +95,16 @@ impl Header {
     pub fn set_dst_addr(&mut self, dst_addr: u128) {
         self.dst_addr = dst_addr.to_be_bytes();
     }
+
+    pub fn swap_src_and_dst(&mut self) {
+        let src_addr = self.src_addr;
+        self.src_addr = self.dst_addr;
+        self.dst_addr = src_addr;
+
+        let src_port = self.src_port;
+        self.src_port = self.dst_port;
+        self.dst_port = src_port;
+    }
 }
 
 #[derive(Debug)]
