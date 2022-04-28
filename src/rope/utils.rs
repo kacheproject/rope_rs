@@ -52,3 +52,15 @@ impl NoDupSenderIdCounter {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::NoDupSenderIdCounter;
+
+    #[test]
+    fn counter_should_have_another_idx_after_return_an_idx(){
+        let mut counter = NoDupSenderIdCounter::new();
+        assert!(counter.next().is_some());
+        assert!(counter.next().is_some());
+    }
+}
