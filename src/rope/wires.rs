@@ -12,6 +12,8 @@ pub trait Tx: Debug + Send + Sync {
     fn get_availability(&self) -> f64;
 
     fn is_removable(&self) -> bool;
+
+    fn is_match_addr(&self, exaddr: ExternalAddr) -> bool;
 }
 
 #[async_trait]

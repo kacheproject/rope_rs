@@ -77,4 +77,7 @@ impl Tx for ChanPairTx {
         self.tx.is_closed()
     }
 
+    fn is_match_addr(&self, exaddr: ExternalAddr) -> bool {
+        false
+    }
 }

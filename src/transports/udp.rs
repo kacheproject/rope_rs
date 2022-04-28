@@ -56,6 +56,13 @@ impl Tx for UdpTx {
         let is_timeout = status.is_timeout(300);
         is_receiving && is_timeout
     }
+
+    fn is_match_addr(&self, exaddr: ExternalAddr) -> bool {
+        match exaddr {
+            ExternalAddr::Udp(sockaddr) => self.dst_addr == sockaddr,
+            _ => false
+        }
+    }
 }
 
 #[derive(Debug)]
