@@ -70,4 +70,8 @@ impl Msg {
     pub fn to_buffer(self) -> Vec<u8> {
         self.packet.to_buffer()
     }
+
+    pub fn split_vec(self) -> (Header, Vec<u8>) {
+        self.packet.split_vec()
+    }
 }
