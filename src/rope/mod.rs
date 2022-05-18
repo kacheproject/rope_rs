@@ -589,4 +589,8 @@ impl Socket {
     pub fn get_local_port(&self) -> u16 {
         self.port
     }
+
+    pub fn get_router_id(&self) -> u128 {
+        self.router_id
+    }
 }
