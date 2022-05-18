@@ -275,6 +275,16 @@ impl BoxedPacket {
             Err(std::io::Error::from(std::io::ErrorKind::InvalidData))
         }
     }
+
+    pub fn split_vec(mut self) -> (Header, Vec<u8>) {
+        let header = self.get_header();
+        if self.skipped_40 {
+            let new = self.payload.split_off(40);
+            return (header, new);
+        } else {
+            return (header, self.payload);
+        }
+    } 
 }
 
 impl From<&Packet<'_>> for BoxedPacket {
